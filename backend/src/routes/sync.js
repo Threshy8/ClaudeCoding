@@ -227,14 +227,24 @@ router.post('/shopify', async (req, res) => {
         for (const li of (order.line_items || [])) idToSku[String(li.id)] = li.sku || `NO-SKU-${li.product_id}`;
 
         console.log(`[SYNC REFUND] order #${order.id} (${order.financial_status})`);
+
+        // Dump every refund line item
         for (const refund of order.refunds) {
           for (const rli of (refund.refund_line_items || [])) {
             const itemId = String(rli.line_item_id);
-            const sku = idToSku[itemId] || '(id not found in line_items)';
-            console.log(`  rli: line_item_id=${itemId}  sku=${sku}  qty_refunded=${rli.quantity}`);
+            const skuFromOrder = idToSku[itemId] || '*** NOT IN order.line_items — orphaned refund ***';
+            console.log(`  rli: line_item_id=${itemId}  sku=${skuFromOrder}  qty_refunded=${rli.quantity}`);
           }
         }
         console.log(`  refundMap (id→qty):`, refundMap);
+
+        // Dump every line item in this order so we can see IDs vs refundMap keys
+        console.log(`  order.line_items (${(order.line_items || []).length} items):`);
+        for (const li of (order.line_items || [])) {
+          const hit = refundMap[String(li.id)];
+          console.log(`    id=${li.id}  sku=${li.sku || '(none)'}  qty=${li.quantity}`
+            + (hit !== undefined ? `  <-- WILL subtract ${hit}` : ''));
+        }
       }
       // ─────────────────────────────────────────────────────────────────────
 
@@ -242,6 +252,7 @@ router.post('/shopify', async (req, res) => {
       const lineItems = order.line_items || [];
       const lines = [];
       let grossLineTotal = 0;
+      const matchedRefundIds = new Set();
 
       for (const item of lineItems) {
         const grossQty = item.quantity || 0;
@@ -250,6 +261,7 @@ router.post('/shopify', async (req, res) => {
 
         // ── DEBUG: log when a refund is actually applied to a line item ────
         if (refundedQty > 0) {
+          matchedRefundIds.add(String(item.id));
           console.log(`  [APPLIED] order #${order.id}  sku=${item.sku}  line_item_id=${item.id}`
             + `  gross=${grossQty}  refunded=${refundedQty}  net=${netQty}`);
         }
@@ -265,6 +277,18 @@ router.post('/shopify', async (req, res) => {
           lineGross,
         });
       }
+
+      // ── DEBUG: flag any refund IDs that had no matching line item ──────────
+      for (const refundId of Object.keys(refundMap)) {
+        if (!matchedRefundIds.has(refundId)) {
+          // idToSku was built before this loop — rebuild a quick lookup for the warning
+          const orphanSku = (order.line_items || []).find(li => String(li.id) === refundId)?.sku || '???';
+          console.log(`  [ORPHANED REFUND] order #${order.id}  line_item_id=${refundId}`
+            + `  sku=${orphanSku}  qty=${refundMap[refundId]}`
+            + `  -- refund exists but no matching item in order.line_items`);
+        }
+      }
+      // ──────────────────────────────────────────────────────────────────────
 
       // Skip orders where all line items were returned (nothing left to record)
       if (lines.length === 0) continue;
