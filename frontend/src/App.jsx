@@ -45,10 +45,13 @@ export default function App() {
       <header className="header">
         <div className="header-left">
           <div className="logo">
-            <span className="logo-icon">⌚</span>
-            <div>
+            <div className="logo-mark">
+              <span className="logo-mark-diamond">◆ ◆ ◆</span>
+              <div className="logo-mark-line" />
+            </div>
+            <div className="logo-text">
               <div className="logo-title">The Watch Box Co.</div>
-              <div className="logo-sub">COGS & Inventory Manager</div>
+              <div className="logo-sub">Inventory &amp; COGS Manager</div>
             </div>
           </div>
         </div>
