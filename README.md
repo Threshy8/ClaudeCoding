@@ -72,15 +72,23 @@ npm run dev   # starts on port 3001
 |---|---|
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_ANON_KEY` | Supabase anon/public key |
-| `SHOPIFY_STORE_URL` | e.g. `https://the-watch-box-co.myshopify.com` |
-| `SHOPIFY_ACCESS_TOKEN` | Private app access token (shpat_...) |
+| `SHOPIFY_STORE_URL` | Your store URL, e.g. `https://the-watch-box-co.myshopify.com` |
+| `SHOPIFY_ACCESS_TOKEN` | Custom app access token (shpat_...) — **recommended** |
+| *or* `SHOPIFY_CLIENT_ID` + `SHOPIFY_CLIENT_SECRET` | OAuth credentials (alternative) |
 | `PORT` | Backend port (default 3001) |
 | `FRONTEND_URL` | CORS origin (default http://localhost:3000) |
 
-#### Shopify Private App setup:
-1. Shopify Admin → Settings → Apps → Develop Apps
-2. Create app → Configure Admin API scopes: `read_orders`, `read_products`
-3. Install app → copy the **Admin API access token**
+#### Shopify setup (choose one):
+
+**Option A — Custom app (simplest):**
+1. Shopify Admin → **Settings** → **Apps and sales channels** → **Develop apps** → **Create an app**
+2. Configure **Admin API scopes**: `read_orders`, `read_products`
+3. **Install app** → **Reveal token once** → Copy the Admin API access token (starts with `shpat_`)
+4. Add `SHOPIFY_ACCESS_TOKEN=shpat_...` to your `.env`
+
+**Option B — OAuth client credentials:**
+1. Create app in Shopify Partner Dashboard (for your own stores)
+2. Use `SHOPIFY_CLIENT_ID` + `SHOPIFY_CLIENT_SECRET` in `.env` (token auto-refreshes)
 
 ### 3. Frontend
 

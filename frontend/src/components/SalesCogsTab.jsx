@@ -13,7 +13,13 @@ export default function SalesCogsTab({ period }) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    getCogsSummary(period)
+    const now = new Date();
+    const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const through =
+      period === currentPeriod
+        ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+        : undefined;
+    getCogsSummary(period, through)
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));

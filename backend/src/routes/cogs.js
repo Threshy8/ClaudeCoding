@@ -10,11 +10,28 @@ const supabase = require('../db/supabase');
  * units_on_hand = total_purchased - total_sold (all time)
  */
 
-async function buildCogsData(period) {
-  // Parse period (e.g. "2026-02") into date range
+async function buildCogsData(period, through) {
   const [year, month] = period.split('-').map(Number);
   const periodStart = `${year}-${String(month).padStart(2, '0')}-01`;
-  const nextMonth = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+  let periodEnd = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+
+  // Cap end date: explicit ?through=YYYY-MM-DD, or "month to date" for current month
+  if (through && /^\d{4}-\d{2}-\d{2}$/.test(through)) {
+    const throughDate = new Date(through + 'T12:00:00Z');
+    const nextDay = new Date(throughDate);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    periodEnd = nextDay.toISOString().slice(0, 10);
+  } else {
+    const tz = process.env.SHOPIFY_STORE_TIMEZONE;
+    const now = new Date();
+    const today = tz ? now.toLocaleDateString('en-CA', { timeZone: tz }) : now.toISOString().slice(0, 10);
+    const isCurrentMonth = period === today.slice(0, 7);
+    if (isCurrentMonth && today >= periodStart && today < periodEnd) {
+      const [ty, tm, td] = today.split('-').map(Number);
+      const nextDay = new Date(Date.UTC(ty, tm - 1, td + 1));
+      periodEnd = nextDay.toISOString().slice(0, 10);
+    }
+  }
 
   // 1. Get all purchases (all time) to compute average costs and total stock purchased
   const { data: allPurchases, error: purchaseError } = await supabase
@@ -35,7 +52,7 @@ async function buildCogsData(period) {
     .from('shopify_sales')
     .select('sku, product_name, quantity_sold, sale_price, order_date')
     .gte('order_date', periodStart)
-    .lt('order_date', nextMonth);
+    .lt('order_date', periodEnd);
 
   if (periodSalesError) throw new Error(periodSalesError.message);
 
@@ -142,15 +159,16 @@ async function buildCogsData(period) {
   };
 }
 
-// GET /api/cogs/summary?period=2026-02
+// GET /api/cogs/summary?period=2026-02&through=2026-03-10 (optional: cap end date)
 router.get('/summary', async (req, res) => {
   const period = req.query.period;
+  const through = req.query.through; // optional YYYY-MM-DD to match Shopify report range
   if (!period || !/^\d{4}-\d{2}$/.test(period)) {
     return res.status(400).json({ error: 'period query param required in format YYYY-MM (e.g. 2026-02)' });
   }
 
   try {
-    const data = await buildCogsData(period);
+    const data = await buildCogsData(period, through);
     res.json(data);
   } catch (err) {
     console.error('COGS summary error:', err.message);
