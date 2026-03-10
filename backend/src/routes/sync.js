@@ -50,7 +50,8 @@ async function getAccessToken(store, storeUrl, accessToken, clientId, clientSecr
 async function fetchAllOrders(storeUrl, accessToken) {
   const base = storeUrl.replace(/\/$/, '');
   const orders = [];
-  let url = `${base}/admin/api/2024-01/orders.json?status=any&limit=250`;
+  // financial_status=paid filters at the API — excludes cancelled/refunded/voided before they even arrive
+  let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=paid&limit=250`;
 
   while (url) {
     const response = await axios.get(url, {
@@ -158,20 +159,16 @@ router.post('/shopify', async (req, res) => {
     const token = await getAccessToken(store, storeUrl, accessToken, clientId, clientSecret);
     const orders = await fetchAllOrders(storeUrl, token);
 
-    // Exclude cancelled/refunded/voided so revenue matches Shopify Analytics
-    const excludeFinancial = ['refunded', 'voided'];
     const salesRecords = [];
-    const excludedOrderIds = [];
 
     for (const order of orders) {
-      if (order.test) {
-        excludedOrderIds.push(String(order.id));
-        continue;
-      }
-      if (order.status === 'cancelled' || excludeFinancial.includes(order.financial_status)) {
-        excludedOrderIds.push(String(order.id));
-        continue;
-      }
+      // Skip test orders and anything that slipped through that isn't paid
+      if (order.test) continue;
+      if (order.cancelled_at) continue;
+      if (order.financial_status !== 'paid') continue;
+      // AUD only — skip foreign-currency orders so revenue is always in AUD
+      if (order.currency !== 'AUD') continue;
+
       // Use store timezone for order date so period filtering matches Shopify Analytics
       const tz = process.env.SHOPIFY_STORE_TIMEZONE;
       let orderDate = null;
@@ -181,67 +178,54 @@ router.post('/shopify', async (req, res) => {
           ? d.toLocaleDateString('en-CA', { timeZone: tz })
           : order.created_at.split('T')[0];
       }
-      // Use current_total_price (Total sales = net sales + shipping + taxes) to match Shopify "Total sales over time"
-      const orderTotal = parseFloat(order.current_total_price || '0') || 0;
 
+      // total_price = the amount the customer actually paid (AUD, incl. shipping + taxes, after discounts)
+      const orderTotal = parseFloat(order.total_price || '0') || 0;
+
+      // Build per-line-item gross revenue so we can split orderTotal proportionally
       const lineItems = order.line_items || [];
-      const linesWithRevenue = [];
-      let totalLineRevenue = 0;
+      const lines = [];
+      let grossLineTotal = 0;
 
       for (const item of lineItems) {
-        // current_quantity = quantity minus refunds/removals (Shopify 2024-01+) — matches "Net items sold"
-        const netQty = Math.max(0, item.current_quantity ?? item.quantity ?? 0);
-        if (netQty <= 0) continue;
-
-        const grossUnitPrice = parseFloat(item.price);
-        const totalDiscount = parseFloat(item.total_discount || '0');
-        const unitDiscount = item.quantity > 0 ? totalDiscount / item.quantity : 0;
-        const netUnitPrice = Math.max(0, grossUnitPrice - unitDiscount);
-        const lineRevenue = netQty * netUnitPrice;
-        totalLineRevenue += lineRevenue;
-        linesWithRevenue.push({
+        const qty = item.quantity || 0;
+        if (qty <= 0) continue;
+        const lineGross = parseFloat(item.price) * qty;
+        grossLineTotal += lineGross;
+        lines.push({
           sku: item.sku || `NO-SKU-${item.product_id}`,
           product_name: item.title || item.name || 'Unknown',
-          quantity: netQty,
-          lineRevenue,
-          netUnitPrice,
+          qty,
+          lineGross,
         });
       }
 
-      // Allocate order total across line items (includes shipping + taxes so revenue matches "Total sales over time")
-      const scale = totalLineRevenue > 0 && orderTotal >= 0 ? orderTotal / totalLineRevenue : 1;
+      // Allocate total_price proportionally so per-SKU revenue sums to the actual order total
+      const scale = grossLineTotal > 0 ? orderTotal / grossLineTotal : 1;
 
-      // Aggregate by (order_id, sku) in case multiple line items share SKU
+      // Aggregate by SKU (handles duplicate SKUs in one order)
       const bySku = {};
-      for (const { sku, product_name, quantity, lineRevenue, netUnitPrice } of linesWithRevenue) {
-        const allocatedRevenue = lineRevenue * scale;
-        const allocUnitPrice = quantity > 0 ? allocatedRevenue / quantity : 0;
-        if (!bySku[sku]) {
-          bySku[sku] = { product_name, qty: 0, revenue: 0 };
-        }
-        bySku[sku].qty += quantity;
-        bySku[sku].revenue += allocatedRevenue;
+      for (const { sku, product_name, qty, lineGross } of lines) {
+        if (!bySku[sku]) bySku[sku] = { product_name, qty: 0, revenue: 0 };
+        bySku[sku].qty += qty;
+        bySku[sku].revenue += lineGross * scale;
       }
 
       for (const [sku, d] of Object.entries(bySku)) {
-        if (d.qty <= 0) continue;
-        const unitPrice = d.revenue / d.qty;
         salesRecords.push({
           shopify_order_id: String(order.id),
           sku,
           product_name: d.product_name,
           quantity_sold: d.qty,
-          sale_price: unitPrice,
+          sale_price: Math.round((d.revenue / d.qty) * 100) / 100,
           order_date: orderDate,
           store,
         });
       }
     }
 
-    // Remove excluded orders from DB so re-sync corrects revenue
-    if (excludedOrderIds.length > 0) {
-      await supabase.from('shopify_sales').delete().in('shopify_order_id', excludedOrderIds);
-    }
+    // Wipe existing records for this store so stale cancelled/refunded rows don't persist
+    await supabase.from('shopify_sales').delete().eq('store', store);
 
     // Upsert all records — idempotent on (shopify_order_id, sku)
     let inserted = 0;
@@ -264,8 +248,8 @@ router.post('/shopify', async (req, res) => {
     res.json({
       success: true,
       store,
-      orders_processed: orders.length,
-      orders_excluded: excludedOrderIds.length,
+      orders_fetched: orders.length,
+      orders_synced: salesRecords.length > 0 ? [...new Set(salesRecords.map(r => r.shopify_order_id))].length : 0,
       line_items_synced: inserted,
       errors: errors.length > 0 ? errors : undefined,
     });
