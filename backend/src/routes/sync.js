@@ -3,6 +3,16 @@ const router = express.Router();
 const axios = require('axios');
 const supabase = require('../db/supabase');
 
+// Exchange client credentials for an OAuth access token
+async function getOAuthToken(storeUrl, clientId, clientSecret) {
+  const response = await axios.post(
+    `${storeUrl}/admin/oauth/access_token`,
+    { client_id: clientId, client_secret: clientSecret, grant_type: 'client_credentials' },
+    { headers: { 'Content-Type': 'application/json' } }
+  );
+  return response.data.access_token;
+}
+
 // Fetch all orders from a Shopify store with pagination
 async function fetchAllOrders(storeUrl, accessToken) {
   const orders = [];
@@ -35,23 +45,26 @@ async function fetchAllOrders(storeUrl, accessToken) {
 router.post('/shopify', async (req, res) => {
   const store = req.body.store || 'au'; // 'au' or 'us'
 
-  let storeUrl, accessToken;
+  let storeUrl, clientId, clientSecret;
 
   if (store === 'au') {
     storeUrl = process.env.SHOPIFY_STORE_URL;
-    accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+    clientId = process.env.SHOPIFY_CLIENT_ID;
+    clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
   } else if (store === 'us') {
     storeUrl = process.env.SHOPIFY_US_STORE_URL;
-    accessToken = process.env.SHOPIFY_US_ACCESS_TOKEN;
+    clientId = process.env.SHOPIFY_US_CLIENT_ID;
+    clientSecret = process.env.SHOPIFY_US_CLIENT_SECRET;
   } else {
     return res.status(400).json({ error: 'Invalid store. Use "au" or "us".' });
   }
 
-  if (!storeUrl || !accessToken) {
+  if (!storeUrl || !clientId || !clientSecret) {
     return res.status(500).json({ error: `Shopify credentials not configured for store: ${store}` });
   }
 
   try {
+    const accessToken = await getOAuthToken(storeUrl, clientId, clientSecret);
     const orders = await fetchAllOrders(storeUrl, accessToken);
 
     const salesRecords = [];
