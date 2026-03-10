@@ -242,5 +242,35 @@ router.get('/summary', async (req, res) => {
   }
 });
 
+// GET /api/cogs/debug — shows raw row counts from both sales/refunds tables
+// Useful for diagnosing sync issues; safe to call anytime
+router.get('/debug', async (req, res) => {
+  const store = req.query.store || 'au';
+
+  const [salesRes, refundsRes, recentRefundsRes] = await Promise.all([
+    supabase.from('shopify_sales').select('sku, quantity_sold, order_date', { count: 'exact' }).eq('store', store),
+    supabase.from('shopify_refunds').select('sku, quantity_refunded, refund_date', { count: 'exact' }).eq('store', store),
+    supabase.from('shopify_refunds')
+      .select('sku, quantity_refunded, refund_date, shopify_refund_id')
+      .eq('store', store)
+      .order('refund_date', { ascending: false })
+      .limit(20),
+  ]);
+
+  res.json({
+    store,
+    shopify_sales: {
+      total_rows: salesRes.count,
+      error: salesRes.error?.message || null,
+    },
+    shopify_refunds: {
+      total_rows: refundsRes.count,
+      error: refundsRes.error?.message || null,
+      recent_20: recentRefundsRes.data || [],
+      recent_error: recentRefundsRes.error?.message || null,
+    },
+  });
+});
+
 module.exports = router;
 module.exports.buildCogsData = buildCogsData;
