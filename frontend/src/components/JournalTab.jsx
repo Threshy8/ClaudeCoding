@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { getCogsSummary, exportJournal } from '../api';
+import { triggerLabel } from './DateRangePicker';
 
 function fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
@@ -17,7 +18,7 @@ function downloadCsv(content, filename) {
   URL.revokeObjectURL(url);
 }
 
-export default function JournalTab({ period }) {
+export default function JournalTab({ dateRange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,27 +26,29 @@ export default function JournalTab({ period }) {
   const [exportMsg, setExportMsg] = useState(null);
 
   useEffect(() => {
+    if (!dateRange?.start || !dateRange?.end) return;
     setLoading(true);
     setError(null);
-    const now = new Date();
-    const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const through =
-      period === currentPeriod
-        ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-        : undefined;
-    getCogsSummary(period, through)
+    getCogsSummary(dateRange)
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [period]);
+  }, [dateRange]);
+
+  // Derive a YYYY-MM period from the end of the range (for journal date + export filename)
+  const period = dateRange?.end ? dateRange.end.slice(0, 7) : '';
+  const [year, month] = period ? period.split('-') : ['', ''];
+  const lastDay = year && month ? new Date(parseInt(year), parseInt(month), 0).getDate() : '';
+  const journalDate = lastDay ? `${lastDay}/${month}/${year}` : '';
 
   const handleExport = async () => {
     setExporting(true);
     setExportMsg(null);
     try {
       const csv = await exportJournal(period);
-      downloadCsv(csv, `xero-journal-${period}.csv`);
-      setExportMsg({ type: 'success', text: `Downloaded xero-journal-${period}.csv — import this into Xero via Accounting > Manual Journals.` });
+      const filename = `xero-journal-${period}.csv`;
+      downloadCsv(csv, filename);
+      setExportMsg({ type: 'success', text: `Downloaded ${filename} — import into Xero via Accounting > Manual Journals.` });
     } catch (err) {
       setExportMsg({ type: 'error', text: 'Export failed: ' + err.message });
     } finally {
@@ -54,22 +57,19 @@ export default function JournalTab({ period }) {
   };
 
   if (loading) return <div className="loading">Loading journal data…</div>;
-  if (error) return <div className="error-msg">{error}</div>;
-  if (!data) return null;
+  if (error)   return <div className="error-msg">{error}</div>;
+  if (!data)   return null;
 
   const hasCogs = data.sku_breakdown.some((s) => s.cogs > 0);
-  const [year, month] = period.split('-');
-  const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
-  const journalDate = `${lastDay}/${month}/${year}`;
+  const rangeLabel = triggerLabel(dateRange);
 
   return (
     <div>
-      {/* Info box */}
       <div className="journal-info">
-        <strong>Xero Journal Entry — {period}</strong>
+        <strong>Xero Journal Entry — {rangeLabel}</strong>
         <br />
-        This journal moves the COGS for goods sold this period from the Inventory Asset account
-        to the Cost of Goods Sold account. Post this at month-end.
+        This journal moves the COGS for goods sold in the selected period from the Inventory Asset account
+        to the Cost of Goods Sold account. Post this at period-end.
         <div className="journal-account-note" style={{ marginTop: 8 }}>
           Account codes used: <strong>1500</strong> — Inventory Asset (CR) · <strong>5000</strong> — Cost of Goods Sold (DR)
           <br />
@@ -77,13 +77,12 @@ export default function JournalTab({ period }) {
         </div>
       </div>
 
-      {/* Summary card */}
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-title">Journal Summary</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
           <div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Journal Date</div>
-            <div style={{ fontWeight: 700 }}>{journalDate}</div>
+            <div style={{ fontWeight: 700 }}>{journalDate || '—'}</div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Total COGS DR</div>
@@ -100,7 +99,6 @@ export default function JournalTab({ period }) {
         </div>
       </div>
 
-      {/* Export button */}
       {exportMsg && (
         <div className={`sync-banner ${exportMsg.type}`} style={{ borderRadius: 'var(--radius)', marginBottom: 16 }}>
           <span>{exportMsg.text}</span>
@@ -118,12 +116,11 @@ export default function JournalTab({ period }) {
         </button>
         {!hasCogs && (
           <span style={{ color: 'var(--text-muted)', fontSize: 13, alignSelf: 'center' }}>
-            No sales data for {period} — sync Shopify or select a period with sales.
+            No sales data for this period — sync Shopify or select a range with sales.
           </span>
         )}
       </div>
 
-      {/* Journal line preview */}
       {hasCogs && (
         <div className="card">
           <div className="card-title">Journal Lines Preview</div>
@@ -140,8 +137,7 @@ export default function JournalTab({ period }) {
               </thead>
               <tbody>
                 {data.sku_breakdown.filter((s) => s.cogs > 0).map((row) => (
-                  <React.Fragment key={`${row.sku}-dr`}>
-                    {/* DR line */}
+                  <React.Fragment key={row.sku}>
                     <tr>
                       <td className="text-muted">{journalDate}</td>
                       <td><span className="mono">5000</span> <span className="text-muted">— COGS</span></td>
@@ -152,7 +148,6 @@ export default function JournalTab({ period }) {
                       <td className="text-right" style={{ color: 'var(--red)' }}>{fmt(row.cogs)}</td>
                       <td className="text-right text-muted">—</td>
                     </tr>
-                    {/* CR line */}
                     <tr>
                       <td className="text-muted">{journalDate}</td>
                       <td><span className="mono">1500</span> <span className="text-muted">— Inventory</span></td>
@@ -163,7 +158,6 @@ export default function JournalTab({ period }) {
                   </React.Fragment>
                 ))}
               </tbody>
-              {/* Totals */}
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
                   <td colSpan={3} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL</td>
@@ -176,7 +170,6 @@ export default function JournalTab({ period }) {
         </div>
       )}
 
-      {/* Instructions */}
       <div style={{ marginTop: 16, padding: '14px 16px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.8 }}>
         <strong style={{ color: 'var(--text)', fontSize: 13 }}>How to import into Xero:</strong>
         <ol style={{ paddingLeft: 18, marginTop: 8 }}>

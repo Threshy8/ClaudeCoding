@@ -35,10 +35,9 @@ export const deletePurchase = (id) => request(`/api/purchases/${id}`, { method: 
 // Products
 export const getProducts = () => request('/api/products');
 
-// COGS — through: optional YYYY-MM-DD to cap period (match Shopify month-to-date)
-export const getCogsSummary = (period, through) => {
-  const params = new URLSearchParams({ period });
-  if (through) params.set('through', through);
+// COGS — accepts a dateRange { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' }
+export const getCogsSummary = ({ start, end }) => {
+  const params = new URLSearchParams({ start_date: start, end_date: end });
   return request(`/api/cogs/summary?${params}`);
 };
 

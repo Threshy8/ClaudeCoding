@@ -1,37 +1,34 @@
 import React, { useEffect, useState } from 'react';
 import { getCogsSummary } from '../api';
+import { triggerLabel } from './DateRangePicker';
 
 function fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
 }
 
-export default function SalesCogsTab({ period }) {
+export default function SalesCogsTab({ dateRange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    if (!dateRange?.start || !dateRange?.end) return;
     setLoading(true);
     setError(null);
-    const now = new Date();
-    const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const through =
-      period === currentPeriod
-        ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-        : undefined;
-    getCogsSummary(period, through)
+    getCogsSummary(dateRange)
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [period]);
+  }, [dateRange]);
 
   if (loading) return <div className="loading">Loading COGS data…</div>;
-  if (error) return <div className="error-msg">{error}</div>;
-  if (!data) return null;
+  if (error)   return <div className="error-msg">{error}</div>;
+  if (!data)   return null;
+
+  const rangeLabel = triggerLabel(dateRange);
 
   return (
     <div>
-      {/* Period KPIs */}
       <div className="kpi-grid" style={{ marginBottom: 24 }}>
         <div className="kpi-card">
           <div className="kpi-label">Period Revenue</div>
@@ -54,10 +51,10 @@ export default function SalesCogsTab({ period }) {
       </div>
 
       <div className="card">
-        <div className="card-title">Sales & COGS by SKU — {period}</div>
+        <div className="card-title">Sales & COGS by SKU — {rangeLabel}</div>
         {data.sku_breakdown.length === 0 ? (
           <div className="empty">
-            No sales data for {period}. Use the "Sync Shopify" button to pull orders, or check that the period is correct.
+            No sales data for this period. Use "Sync Shopify" to pull orders, or adjust the date range.
           </div>
         ) : (
           <div className="table-wrap">
@@ -105,7 +102,6 @@ export default function SalesCogsTab({ period }) {
                   );
                 })}
               </tbody>
-              {/* Totals row */}
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
                   <td colSpan={2} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL</td>
@@ -130,7 +126,6 @@ export default function SalesCogsTab({ period }) {
         )}
       </div>
 
-      {/* Explanation */}
       <div style={{ marginTop: 16, padding: '12px 16px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
         <strong style={{ color: 'var(--text)' }}>Average Cost Method:</strong> Unit cost = weighted average of all purchases for each SKU.
         COGS = units sold in period × average unit cost.

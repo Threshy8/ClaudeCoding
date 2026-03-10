@@ -1,22 +1,26 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import Dashboard from './components/Dashboard';
 import PurchasesTab from './components/PurchasesTab';
 import SalesCogsTab from './components/SalesCogsTab';
 import JournalTab from './components/JournalTab';
+import DateRangePicker from './components/DateRangePicker';
 import { syncShopify } from './api';
 import './App.css';
 
 const TABS = ['Dashboard', 'Stock Purchases', 'Sales & COGS', 'Journal Export'];
 
-// Returns current month as YYYY-MM
-function currentPeriod() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+function defaultRange() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const start = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  const end = `${y}-${String(m + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return { start, end, label: 'This Month' };
 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('Dashboard');
-  const [period, setPeriod] = useState(currentPeriod());
+  const [dateRange, setDateRange] = useState(defaultRange());
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const [syncError, setSyncError] = useState(null);
@@ -50,27 +54,15 @@ export default function App() {
         </div>
 
         <div className="header-right">
-          {/* Period selector */}
-          <div className="period-selector">
-            <label className="period-label">Period</label>
-            <input
-              type="month"
-              className="period-input"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-            />
-          </div>
+          <DateRangePicker value={dateRange} onChange={setDateRange} />
 
-          {/* Sync button */}
           <button
             className={`sync-btn ${syncing ? 'syncing' : ''}`}
             onClick={handleSync}
             disabled={syncing}
           >
             {syncing ? (
-              <>
-                <span className="spin">↻</span> Syncing…
-              </>
+              <><span className="spin">↻</span> Syncing…</>
             ) : (
               <>↺ Sync Shopify</>
             )}
@@ -85,7 +77,7 @@ export default function App() {
             <span>Sync failed: {syncError}</span>
           ) : (
             <span>
-              Sync complete — {syncResult.orders_processed} orders processed,{' '}
+              Sync complete — {syncResult.orders_fetched ?? syncResult.orders_processed ?? 0} orders fetched,{' '}
               {syncResult.line_items_synced} line items synced.
             </span>
           )}
@@ -108,10 +100,10 @@ export default function App() {
 
       {/* Tab content */}
       <main className="main-content">
-        {activeTab === 'Dashboard' && <Dashboard period={period} />}
+        {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} />}
         {activeTab === 'Stock Purchases' && <PurchasesTab />}
-        {activeTab === 'Sales & COGS' && <SalesCogsTab period={period} />}
-        {activeTab === 'Journal Export' && <JournalTab period={period} />}
+        {activeTab === 'Sales & COGS'   && <SalesCogsTab  dateRange={dateRange} />}
+        {activeTab === 'Journal Export'  && <JournalTab    dateRange={dateRange} />}
       </main>
     </div>
   );

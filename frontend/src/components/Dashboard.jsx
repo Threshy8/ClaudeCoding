@@ -1,36 +1,33 @@
 import React, { useEffect, useState } from 'react';
 import { getCogsSummary } from '../api';
+import { triggerLabel } from './DateRangePicker';
 
 function fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 }).format(n || 0);
 }
 
-export default function Dashboard({ period }) {
+export default function Dashboard({ dateRange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    if (!dateRange?.start || !dateRange?.end) return;
     setLoading(true);
     setError(null);
-    const now = new Date();
-    const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const through =
-      period === currentPeriod
-        ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-        : undefined;
-    getCogsSummary(period, through)
+    getCogsSummary(dateRange)
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [period]);
+  }, [dateRange]);
 
   if (loading) return <div className="loading">Loading dashboard…</div>;
-  if (error) return <div className="error-msg">{error}</div>;
-  if (!data) return null;
+  if (error)   return <div className="error-msg">{error}</div>;
+  if (!data)   return null;
 
   const margin = data.gross_margin_pct;
   const marginClass = margin >= 30 ? 'green' : margin >= 10 ? 'accent' : 'red';
+  const rangeLabel = triggerLabel(dateRange);
 
   return (
     <div>
@@ -38,7 +35,7 @@ export default function Dashboard({ period }) {
         <div className="kpi-card">
           <div className="kpi-label">Revenue</div>
           <div className="kpi-value">{fmt(data.total_revenue)}</div>
-          <div className="kpi-sub">Period: {period}</div>
+          <div className="kpi-sub">{rangeLabel}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">True COGS</div>
@@ -58,7 +55,7 @@ export default function Dashboard({ period }) {
       </div>
 
       <div className="card">
-        <div className="card-title">SKU Breakdown — {period}</div>
+        <div className="card-title">SKU Breakdown — {rangeLabel}</div>
         {data.sku_breakdown.length === 0 ? (
           <div className="empty">No sales data for this period. Sync Shopify or log purchases first.</div>
         ) : (
