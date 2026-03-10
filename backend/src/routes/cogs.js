@@ -19,14 +19,21 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   if (purchaseError) throw new Error(purchaseError.message);
 
-  // 2. Get all sales (all time) to compute units sold per SKU (for inventory on-hand)
+  // 2. Get gross sales (all time) — used with all-time refunds for inventory on-hand
   const { data: allSales, error: allSalesError } = await supabase
     .from('shopify_sales')
     .select('sku, quantity_sold');
 
   if (allSalesError) throw new Error(allSalesError.message);
 
-  // 3. Get sales for the requested period only (for revenue and period COGS)
+  // 3. Get all refunds (all time) — subtract from gross to get net sold for inventory on-hand
+  const { data: allRefunds, error: allRefundsError } = await supabase
+    .from('shopify_refunds')
+    .select('sku, quantity_refunded');
+
+  if (allRefundsError) throw new Error(allRefundsError.message);
+
+  // 4. Get gross sales for the period (by order_date)
   const { data: periodSales, error: periodSalesError } = await supabase
     .from('shopify_sales')
     .select('sku, product_name, quantity_sold, sale_price, order_date')
@@ -34,6 +41,17 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .lt('order_date', periodEnd);
 
   if (periodSalesError) throw new Error(periodSalesError.message);
+
+  // 5. Get refunds processed in the period (by refund_date, not order_date)
+  //    This matches Shopify's "Net items sold" methodology: returns reduce the period
+  //    in which they happen, regardless of when the original order was placed.
+  const { data: periodRefunds, error: periodRefundsError } = await supabase
+    .from('shopify_refunds')
+    .select('sku, product_name, quantity_refunded, refund_subtotal')
+    .gte('refund_date', periodStart)
+    .lt('refund_date', periodEnd);
+
+  if (periodRefundsError) throw new Error(periodRefundsError.message);
 
   // --- Build average cost map per SKU ---
   const skuCostMap = {}; // { sku: { totalQty, totalCost, productName } }
@@ -52,29 +70,55 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     totalPurchasedMap[sku] = d.totalQty;
   }
 
-  // --- Build all-time units sold map per SKU ---
-  const allTimeSoldMap = {}; // { sku: totalSold }
+  // --- Build all-time net units sold map per SKU (gross sales − all-time refunds) ---
+  const allTimeSoldMap = {}; // { sku: netSold }
   for (const s of allSales) {
     allTimeSoldMap[s.sku] = (allTimeSoldMap[s.sku] || 0) + s.quantity_sold;
   }
+  for (const r of allRefunds) {
+    allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_refunded;
+  }
 
-  // --- Build period sales summary per SKU ---
-  const periodSkuMap = {}; // { sku: { unitsSold, revenue, productName } }
+  // --- Build period refund map (by refund_date) ---
+  // { sku: { qty, subtotal, product_name } }
+  const periodRefundMap = {};
+  for (const r of periodRefunds) {
+    if (!periodRefundMap[r.sku]) {
+      periodRefundMap[r.sku] = { product_name: r.product_name, qty: 0, subtotal: 0 };
+    }
+    periodRefundMap[r.sku].qty += r.quantity_refunded;
+    periodRefundMap[r.sku].subtotal += parseFloat(r.refund_subtotal || 0);
+  }
+
+  // --- Build period gross sales summary per SKU ---
+  const periodSkuMap = {}; // { sku: { product_name, gross_units, gross_revenue } }
   for (const s of periodSales) {
     if (!periodSkuMap[s.sku]) {
-      periodSkuMap[s.sku] = { product_name: s.product_name, units_sold: 0, revenue: 0 };
+      periodSkuMap[s.sku] = { product_name: s.product_name, gross_units: 0, gross_revenue: 0 };
     }
-    periodSkuMap[s.sku].units_sold += s.quantity_sold;
-    periodSkuMap[s.sku].revenue += s.quantity_sold * parseFloat(s.sale_price);
+    periodSkuMap[s.sku].gross_units += s.quantity_sold;
+    periodSkuMap[s.sku].gross_revenue += s.quantity_sold * parseFloat(s.sale_price);
+  }
+
+  // Merge period refunds into periodSkuMap so cross-period returns create entries too
+  for (const [sku, r] of Object.entries(periodRefundMap)) {
+    if (!periodSkuMap[sku]) {
+      periodSkuMap[sku] = { product_name: r.product_name, gross_units: 0, gross_revenue: 0 };
+    }
   }
 
   // --- Build per-SKU breakdown ---
+  // Net units = gross orders in period − refunds processed in period (by refund_date)
+  // Net revenue = gross revenue − refund subtotals processed in period
   const skuBreakdown = [];
 
   for (const [sku, d] of Object.entries(periodSkuMap)) {
+    const refund = periodRefundMap[sku] || { qty: 0, subtotal: 0 };
+    const units_sold = d.gross_units - refund.qty;
+    const revenue = d.gross_revenue - refund.subtotal;
+
     const avgCost = avgCostMap[sku] || 0;
-    const cogs = d.units_sold * avgCost;
-    const revenue = d.revenue;
+    const cogs = units_sold * avgCost;
     const grossMargin = revenue > 0 ? ((revenue - cogs) / revenue) * 100 : 0;
 
     const totalPurchased = totalPurchasedMap[sku] || 0;
@@ -84,7 +128,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     skuBreakdown.push({
       sku,
       product_name: d.product_name || skuCostMap[sku]?.productName || 'Unknown',
-      units_sold: d.units_sold,
+      units_sold,
       avg_unit_cost: Math.round(avgCost * 100) / 100,
       revenue: Math.round(revenue * 100) / 100,
       cogs: Math.round(cogs * 100) / 100,

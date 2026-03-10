@@ -63,6 +63,32 @@ create index if not exists shopify_sales_order_date_idx on shopify_sales(order_d
 create index if not exists shopify_sales_store_idx on shopify_sales(store);
 
 -- ============================================================
+-- Table: shopify_refunds
+-- Refund line items synced from Shopify — keyed by refund_date
+-- so period queries subtract returns by when they happened,
+-- not when the original order was placed (matches Shopify analytics)
+-- ============================================================
+create table if not exists shopify_refunds (
+  id                uuid primary key default gen_random_uuid(),
+  shopify_order_id  text not null,
+  shopify_refund_id text not null,
+  sku               text not null,
+  product_name      text not null,
+  quantity_refunded integer not null check (quantity_refunded > 0),
+  refund_subtotal   numeric(12, 2) not null default 0,
+  refund_date       date not null,
+  store             text not null default 'au',
+  synced_at         timestamptz default now(),
+
+  -- One row per (refund, sku) — quantities aggregated across line items of same SKU
+  unique (shopify_refund_id, sku)
+);
+
+create index if not exists shopify_refunds_sku_idx   on shopify_refunds(sku);
+create index if not exists shopify_refunds_date_idx  on shopify_refunds(refund_date);
+create index if not exists shopify_refunds_store_idx on shopify_refunds(store);
+
+-- ============================================================
 -- Row Level Security (RLS)
 -- Using anon key from backend — enable RLS and add policies
 -- ============================================================
@@ -78,6 +104,10 @@ create policy "Allow all for anon" on products for all using (true) with check (
 -- shopify_sales
 alter table shopify_sales enable row level security;
 create policy "Allow all for anon" on shopify_sales for all using (true) with check (true);
+
+-- shopify_refunds
+alter table shopify_refunds enable row level security;
+create policy "Allow all for anon" on shopify_refunds for all using (true) with check (true);
 
 -- ============================================================
 -- Sample data (optional — remove before production)

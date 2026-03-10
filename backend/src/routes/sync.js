@@ -46,29 +46,16 @@ async function getAccessToken(store, storeUrl, accessToken, clientId, clientSecr
   );
 }
 
-// Build a map of { line_item_id -> total_refunded_qty } from the refunds already
-// embedded in the order object (Shopify includes full refund data in the orders endpoint,
-// so no extra /refunds.json API call per order is needed).
-function buildRefundMap(order) {
-  const refundedQty = {};
-  for (const refund of (order.refunds || [])) {
-    for (const rli of (refund.refund_line_items || [])) {
-      const id = String(rli.line_item_id);
-      refundedQty[id] = (refundedQty[id] || 0) + (rli.quantity || 0);
-    }
-  }
-  return refundedQty;
-}
-
 // Fetch all orders from a Shopify store with pagination.
-// Includes partially_refunded so we capture paid orders that have had returns processed.
+// Includes partially_refunded and refunded so all gross sales and return events are captured.
 // The orders endpoint embeds full refund data — no separate /refunds.json calls needed.
 async function fetchAllOrders(storeUrl, accessToken) {
   const base = storeUrl.replace(/\/$/, '');
   const orders = [];
-  // paid          = fully paid, no refunds (or non-financial exchanges only)
-  // partially_refunded = paid in full then some items returned/refunded
-  let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=paid,partially_refunded&limit=250`;
+  // paid               = fully paid, no returns
+  // partially_refunded = paid, some items returned
+  // refunded           = paid, all items returned — needed to capture cross-period returns
+  let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=paid,partially_refunded,refunded&limit=250`;
 
   while (url) {
     const response = await axios.get(url, {
@@ -176,62 +163,52 @@ router.post('/shopify', async (req, res) => {
     const token = await getAccessToken(store, storeUrl, accessToken, clientId, clientSecret);
     const orders = await fetchAllOrders(storeUrl, token);
 
+    const tz = process.env.SHOPIFY_STORE_TIMEZONE;
+
+    function toStoreDate(isoString) {
+      if (!isoString) return null;
+      const d = new Date(isoString);
+      return tz ? d.toLocaleDateString('en-CA', { timeZone: tz }) : isoString.split('T')[0];
+    }
+
+    // ── Pass 1: gross sales records (shopify_sales) ───────────────────────────
+    // Store gross quantities ordered so refunds can be applied by refund_date later.
+    // Includes paid, partially_refunded, AND refunded orders — a fully-refunded order
+    // still has a gross sale on the order_date; the return is tracked separately.
     const salesRecords = [];
 
     for (const order of orders) {
-      // Skip test orders and anything that slipped through that isn't paid
       if (order.test) continue;
       if (order.cancelled_at) continue;
-      if (order.financial_status !== 'paid' && order.financial_status !== 'partially_refunded') continue;
-      // AUD only — skip foreign-currency orders so revenue is always in AUD
+      if (!['paid', 'partially_refunded', 'refunded'].includes(order.financial_status)) continue;
       if (order.currency !== 'AUD') continue;
 
-      // Use store timezone for order date so period filtering matches Shopify Analytics
-      const tz = process.env.SHOPIFY_STORE_TIMEZONE;
-      let orderDate = null;
-      if (order.created_at) {
-        const d = new Date(order.created_at);
-        orderDate = tz
-          ? d.toLocaleDateString('en-CA', { timeZone: tz })
-          : order.created_at.split('T')[0];
-      }
+      const orderDate = toStoreDate(order.created_at);
+      // Use total_price (gross, before any refunds) — refund amounts tracked separately
+      const orderTotal = parseFloat(order.total_price || '0') || 0;
 
-      // current_total_price = order total after any partial refunds (AUD, incl. shipping + taxes)
-      // For fully-paid orders (no refunds) this equals total_price.
-      // For partially_refunded orders this correctly reflects the net amount received.
-      const orderTotal = parseFloat(order.current_total_price || '0') || 0;
-
-      // Build refund map from embedded order.refunds so we can subtract returned units
-      const refundMap = buildRefundMap(order);
-
-      // Build per-line-item net quantities (gross qty − refunded qty)
       const lineItems = order.line_items || [];
       const lines = [];
       let grossLineTotal = 0;
 
       for (const item of lineItems) {
-        const grossQty = item.quantity || 0;
-        const refundedQty = refundMap[String(item.id)] || 0;
-        const netQty = Math.max(0, grossQty - refundedQty);
-
-        if (netQty <= 0) continue; // fully returned or zero — exclude from sold count
-        const lineGross = parseFloat(item.price) * netQty;
+        const qty = item.quantity || 0;
+        if (qty <= 0) continue;
+        const lineGross = parseFloat(item.price) * qty;
         grossLineTotal += lineGross;
         lines.push({
           sku: item.sku || `NO-SKU-${item.product_id}`,
           product_name: item.title || item.name || 'Unknown',
-          qty: netQty,
+          qty,
           lineGross,
         });
       }
 
-      // Skip orders where all line items were returned (nothing left to record)
       if (lines.length === 0) continue;
 
-      // Allocate current_total_price proportionally so per-SKU revenue sums to net order total
+      // Allocate total_price proportionally across line items
       const scale = grossLineTotal > 0 ? orderTotal / grossLineTotal : 1;
 
-      // Aggregate by SKU (handles duplicate SKUs in one order)
       const bySku = {};
       for (const { sku, product_name, qty, lineGross } of lines) {
         if (!bySku[sku]) bySku[sku] = { product_name, qty: 0, revenue: 0 };
@@ -252,25 +229,80 @@ router.post('/shopify', async (req, res) => {
       }
     }
 
-    // Wipe existing records for this store so stale cancelled/refunded rows don't persist
-    await supabase.from('shopify_sales').delete().eq('store', store);
+    // ── Pass 2: refund records (shopify_refunds) ──────────────────────────────
+    // Extract every refund line item with its refund_date so COGS queries can subtract
+    // returns in the period they happened (matching Shopify's "Net items sold" method).
+    const refundRecords = [];
 
-    // Upsert all records — idempotent on (shopify_order_id, sku)
+    for (const order of orders) {
+      if (order.test) continue;
+      if (order.cancelled_at) continue;
+      if (order.currency !== 'AUD') continue;
+
+      // Build line_item_id → {sku, product_name} lookup for this order
+      const lineItemMap = {};
+      for (const li of (order.line_items || [])) {
+        lineItemMap[String(li.id)] = {
+          sku: li.sku || `NO-SKU-${li.product_id}`,
+          product_name: li.title || li.name || 'Unknown',
+        };
+      }
+
+      for (const refund of (order.refunds || [])) {
+        const refundDate = toStoreDate(refund.created_at);
+        if (!refundDate) continue;
+
+        // Aggregate refunded qty and subtotal by SKU within this refund event
+        const refundBySku = {};
+        for (const rli of (refund.refund_line_items || [])) {
+          const li = lineItemMap[String(rli.line_item_id)];
+          if (!li) continue;
+          const { sku, product_name } = li;
+          if (!refundBySku[sku]) refundBySku[sku] = { product_name, quantity: 0, subtotal: 0 };
+          refundBySku[sku].quantity += rli.quantity || 0;
+          refundBySku[sku].subtotal += parseFloat(rli.subtotal || '0') || 0;
+        }
+
+        for (const [sku, d] of Object.entries(refundBySku)) {
+          if (d.quantity <= 0) continue;
+          refundRecords.push({
+            shopify_order_id: String(order.id),
+            shopify_refund_id: String(refund.id),
+            sku,
+            product_name: d.product_name,
+            quantity_refunded: d.quantity,
+            refund_subtotal: Math.round(d.subtotal * 100) / 100,
+            refund_date: refundDate,
+            store,
+          });
+        }
+      }
+    }
+
+    // ── Persist ───────────────────────────────────────────────────────────────
+    await supabase.from('shopify_sales').delete().eq('store', store);
+    await supabase.from('shopify_refunds').delete().eq('store', store);
+
     let inserted = 0;
     let errors = [];
 
-    // Process in batches of 100 to avoid Supabase payload limits
     for (let i = 0; i < salesRecords.length; i += 100) {
       const batch = salesRecords.slice(i, i + 100);
       const { error } = await supabase
         .from('shopify_sales')
         .upsert(batch, { onConflict: 'shopify_order_id,sku' });
+      if (error) errors.push(error.message);
+      else inserted += batch.length;
+    }
 
-      if (error) {
-        errors.push(error.message);
-      } else {
-        inserted += batch.length;
-      }
+    let refundsInserted = 0;
+    for (let i = 0; i < refundRecords.length; i += 100) {
+      const batch = refundRecords.slice(i, i + 100);
+      const { error } = await supabase
+        .from('shopify_refunds')
+        .upsert(batch, { onConflict: 'shopify_refund_id,sku' });
+      if (error) errors.push(error.message);
+      else refundsInserted += batch.length;
     }
 
     res.json({
@@ -279,6 +311,7 @@ router.post('/shopify', async (req, res) => {
       orders_fetched: orders.length,
       orders_synced: salesRecords.length > 0 ? [...new Set(salesRecords.map(r => r.shopify_order_id))].length : 0,
       line_items_synced: inserted,
+      refund_line_items_synced: refundsInserted,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
