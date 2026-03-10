@@ -46,12 +46,29 @@ async function getAccessToken(store, storeUrl, accessToken, clientId, clientSecr
   );
 }
 
-// Fetch all orders from a Shopify store with pagination
+// Build a map of { line_item_id -> total_refunded_qty } from the refunds already
+// embedded in the order object (Shopify includes full refund data in the orders endpoint,
+// so no extra /refunds.json API call per order is needed).
+function buildRefundMap(order) {
+  const refundedQty = {};
+  for (const refund of (order.refunds || [])) {
+    for (const rli of (refund.refund_line_items || [])) {
+      const id = String(rli.line_item_id);
+      refundedQty[id] = (refundedQty[id] || 0) + (rli.quantity || 0);
+    }
+  }
+  return refundedQty;
+}
+
+// Fetch all orders from a Shopify store with pagination.
+// Includes partially_refunded so we capture paid orders that have had returns processed.
+// The orders endpoint embeds full refund data — no separate /refunds.json calls needed.
 async function fetchAllOrders(storeUrl, accessToken) {
   const base = storeUrl.replace(/\/$/, '');
   const orders = [];
-  // financial_status=paid filters at the API — excludes cancelled/refunded/voided before they even arrive
-  let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=paid&limit=250`;
+  // paid          = fully paid, no refunds (or non-financial exchanges only)
+  // partially_refunded = paid in full then some items returned/refunded
+  let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=paid,partially_refunded&limit=250`;
 
   while (url) {
     const response = await axios.get(url, {
@@ -165,7 +182,7 @@ router.post('/shopify', async (req, res) => {
       // Skip test orders and anything that slipped through that isn't paid
       if (order.test) continue;
       if (order.cancelled_at) continue;
-      if (order.financial_status !== 'paid') continue;
+      if (order.financial_status !== 'paid' && order.financial_status !== 'partially_refunded') continue;
       // AUD only — skip foreign-currency orders so revenue is always in AUD
       if (order.currency !== 'AUD') continue;
 
@@ -179,28 +196,38 @@ router.post('/shopify', async (req, res) => {
           : order.created_at.split('T')[0];
       }
 
-      // total_price = the amount the customer actually paid (AUD, incl. shipping + taxes, after discounts)
-      const orderTotal = parseFloat(order.total_price || '0') || 0;
+      // current_total_price = order total after any partial refunds (AUD, incl. shipping + taxes)
+      // For fully-paid orders (no refunds) this equals total_price.
+      // For partially_refunded orders this correctly reflects the net amount received.
+      const orderTotal = parseFloat(order.current_total_price || '0') || 0;
 
-      // Build per-line-item gross revenue so we can split orderTotal proportionally
+      // Build refund map from embedded order.refunds so we can subtract returned units
+      const refundMap = buildRefundMap(order);
+
+      // Build per-line-item net quantities (gross qty − refunded qty)
       const lineItems = order.line_items || [];
       const lines = [];
       let grossLineTotal = 0;
 
       for (const item of lineItems) {
-        const qty = item.quantity || 0;
-        if (qty <= 0) continue;
-        const lineGross = parseFloat(item.price) * qty;
+        const grossQty = item.quantity || 0;
+        const refundedQty = refundMap[String(item.id)] || 0;
+        const netQty = Math.max(0, grossQty - refundedQty);
+        if (netQty <= 0) continue; // fully returned or zero — exclude from sold count
+        const lineGross = parseFloat(item.price) * netQty;
         grossLineTotal += lineGross;
         lines.push({
           sku: item.sku || `NO-SKU-${item.product_id}`,
           product_name: item.title || item.name || 'Unknown',
-          qty,
+          qty: netQty,
           lineGross,
         });
       }
 
-      // Allocate total_price proportionally so per-SKU revenue sums to the actual order total
+      // Skip orders where all line items were returned (nothing left to record)
+      if (lines.length === 0) continue;
+
+      // Allocate current_total_price proportionally so per-SKU revenue sums to net order total
       const scale = grossLineTotal > 0 ? orderTotal / grossLineTotal : 1;
 
       // Aggregate by SKU (handles duplicate SKUs in one order)
