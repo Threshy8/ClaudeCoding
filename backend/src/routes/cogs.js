@@ -272,6 +272,78 @@ router.get('/debug', async (req, res) => {
   });
 });
 
+// ── GET /api/cogs/orders ──────────────────────────────────────────────────────
+// Returns order-level sales breakdown for the period
+router.get('/orders', async (req, res) => {
+  const { start_date, end_date, store = 'au' } = req.query;
+  if (!start_date || !end_date) return res.status(400).json({ error: 'start_date and end_date required' });
+
+  // Get all purchases for avg cost calculation
+  const { data: purchases, error: pErr } = await supabase
+    .from('purchases')
+    .select('sku, quantity, unit_cost');
+  if (pErr) return res.status(500).json({ error: pErr.message });
+
+  // Build avg cost map
+  const costMap = {};
+  for (const p of (purchases || [])) {
+    if (!costMap[p.sku]) costMap[p.sku] = { totalCost: 0, totalQty: 0 };
+    costMap[p.sku].totalCost += p.unit_cost * p.quantity;
+    costMap[p.sku].totalQty  += p.quantity;
+  }
+  const avgCost = (sku) => {
+    const c = costMap[sku];
+    return c && c.totalQty > 0 ? c.totalCost / c.totalQty : 0;
+  };
+
+  // Get all sales in period grouped by order
+  const { data: sales, error: sErr } = await supabase
+    .from('shopify_sales')
+    .select('shopify_order_id, order_number, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
+    .gte('order_date', start_date)
+    .lte('order_date', end_date)
+    .eq('store', store)
+    .order('order_date', { ascending: false });
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  // Group by order
+  const orderMap = {};
+  for (const s of (sales || [])) {
+    if ((s.sku || '').toLowerCase().includes('x-redo')) continue; // exclude non-physical
+    if (!orderMap[s.shopify_order_id]) {
+      orderMap[s.shopify_order_id] = {
+        shopify_order_id:     s.shopify_order_id,
+        order_number:         s.order_number || s.shopify_order_id,
+        order_date:           s.order_date,
+        fulfillment_location: s.fulfillment_location || 'Unknown',
+        line_items: [],
+        total_units:   0,
+        total_revenue: 0,
+        total_cogs:    0,
+      };
+    }
+    const o = orderMap[s.shopify_order_id];
+    const qty     = s.quantity_sold || 0;
+    const revenue = qty * parseFloat(s.sale_price || 0);
+    const cogs    = qty * avgCost(s.sku);
+    o.line_items.push({ sku: s.sku, product_name: s.product_name, qty, revenue, cogs });
+    o.total_units   += qty;
+    o.total_revenue += revenue;
+    o.total_cogs    += cogs;
+  }
+
+  const orders = Object.values(orderMap).map(o => ({
+    ...o,
+    total_revenue:    Math.round(o.total_revenue * 100) / 100,
+    total_cogs:       Math.round(o.total_cogs    * 100) / 100,
+    gross_profit:     Math.round((o.total_revenue - o.total_cogs) * 100) / 100,
+    gross_margin_pct: o.total_revenue > 0 ? Math.round((o.total_revenue - o.total_cogs) / o.total_revenue * 100) : null,
+  }));
+
+  orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
+  res.json(orders);
+});
+
 // ── GET /api/cogs/refunds ─────────────────────────────────────────────────────
 // Returns all refunds with order date, refund date, SKU, qty, subtotal
 router.get('/refunds', async (req, res) => {
