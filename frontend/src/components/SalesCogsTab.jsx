@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { getCogsSummary } from '../api';
 import { triggerLabel } from './DateRangePicker';
 
@@ -26,18 +26,74 @@ function MarginBadge({ pct }) {
   return <span className={`badge ${cls}`}>{pct}%</span>;
 }
 
-function SkuView({ data, rangeLabel }) {
+function CogsSourceBadge({ isFifo }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700,
+      letterSpacing: '0.04em',
+      background: isFifo ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
+      color: isFifo ? '#059669' : '#d97706',
+      border: `1px solid ${isFifo ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}`,
+    }}>
+      <span style={{
+        width: 6, height: 6, borderRadius: '50%',
+        background: isFifo ? '#10b981' : '#f59e0b',
+      }} />
+      {isFifo ? 'FIFO' : 'WAC estimate'}
+    </span>
+  );
+}
+
+function CostTooltip({ entry }) {
+  const [show, setShow] = useState(false);
+  const ref = useRef(null);
+
+  if (!entry) return null;
+
+  const purchase = parseFloat(entry.purchase_cost) || 0;
+  const shipping = parseFloat(entry.gd_shipping) || 0;
+  const handling = parseFloat(entry.scc_handling) || 0;
+  const total = purchase + shipping + handling;
+
+  return (
+    <span ref={ref} style={{ position: 'relative', cursor: 'help' }}
+      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
+      {fmt(total)}
+      {show && (
+        <div style={{
+          position: 'absolute', bottom: '100%', right: 0, marginBottom: 6,
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: 8, padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+          whiteSpace: 'nowrap', zIndex: 100, fontSize: 12, lineHeight: 1.8,
+          minWidth: 180,
+        }}>
+          <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--text)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Cost breakdown</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Purchase cost</span><span style={{ fontWeight: 600 }}>{fmt(purchase)}</span></div>
+          {shipping > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>GD shipping</span><span style={{ fontWeight: 600 }}>{fmt(shipping)}</span></div>}
+          {handling > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>SCC handling</span><span style={{ fontWeight: 600 }}>{fmt(handling)}</span></div>}
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}><span>Total COGS</span><span>{fmt(total)}</span></div>
+        </div>
+      )}
+    </span>
+  );
+}
+
+function SkuView({ data, rangeLabel, fifoMap, isFifo }) {
   const rows = (data.sku_breakdown || []).filter(r => !(r.sku || '').toLowerCase().includes('x-redo'));
   const sortedRows = [...rows].sort((a, b) => b.revenue - a.revenue);
   const totalUnits  = rows.reduce((s, r) => s + r.units_sold, 0);
   const totalRev    = rows.reduce((s, r) => s + r.revenue, 0);
-  const totalCogs   = rows.reduce((s, r) => s + r.cogs, 0);
+  const totalCogs   = rows.reduce((s, r) => s + (isFifo && fifoMap[r.sku] ? fifoMap[r.sku].total_cogs : r.cogs), 0);
   const totalProfit = totalRev - totalCogs;
   const totalMargin = totalRev > 0 ? Math.round(totalProfit / totalRev * 100) : null;
 
   return (
     <div className="card">
-      <div className="card-title">Sales & COGS by SKU — {rangeLabel}</div>
+      <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        Sales & COGS by SKU — {rangeLabel}
+        <CogsSourceBadge isFifo={isFifo} />
+      </div>
       {sortedRows.length === 0 ? (
         <div className="empty">No sales data for this period.</div>
       ) : (
@@ -54,17 +110,28 @@ function SkuView({ data, rangeLabel }) {
             </thead>
             <tbody>
               {sortedRows.map((row) => {
-                const profit = row.revenue - row.cogs;
+                const fifoEntry = fifoMap[row.sku];
+                const cogs = isFifo && fifoEntry ? fifoEntry.total_cogs : row.cogs;
+                const avgCost = isFifo && fifoEntry && fifoEntry.units_sold > 0
+                  ? fifoEntry.total_cogs / fifoEntry.units_sold
+                  : row.avg_unit_cost;
+                const profit = row.revenue - cogs;
+                const margin = row.revenue > 0 ? Math.round(profit / row.revenue * 100) : null;
                 return (
                   <tr key={row.sku}>
                     <td><span className="mono">{row.sku}</span></td>
                     <td>{row.product_name}</td>
                     <td className="text-right">{row.units_sold}</td>
-                    <td className="text-right">{fmt(row.avg_unit_cost)}</td>
+                    <td className="text-right">{fmt(avgCost)}</td>
                     <td className="text-right">{fmt(row.revenue)}</td>
-                    <td className="text-right">{fmt(row.cogs)}</td>
+                    <td className="text-right">
+                      {isFifo && fifoEntry
+                        ? <CostTooltip entry={fifoEntry} />
+                        : fmt(cogs)
+                      }
+                    </td>
                     <td className="text-right" style={{ color: profit >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(profit)}</td>
-                    <td className="text-right"><MarginBadge pct={row.gross_margin_pct} /></td>
+                    <td className="text-right"><MarginBadge pct={margin != null ? margin : row.gross_margin_pct} /></td>
                     <td className="text-right">{row.units_on_hand}</td>
                     <td className="text-right">{fmt(row.inventory_value)}</td>
                   </tr>
@@ -213,13 +280,51 @@ export default function SalesCogsTab({ dateRange }) {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   const [view, setView]       = useState('sku');
+  const [fifoMap, setFifoMap] = useState({});
+  const [isFifo, setIsFifo]   = useState(false);
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
     setLoading(true);
     setError(null);
-    getCogsSummary(dateRange)
-      .then(setData)
+    setIsFifo(false);
+    setFifoMap({});
+
+    const summaryPromise = getCogsSummary(dateRange);
+    const fifoPromise = apiFetch(`/api/cogs/entries?start_date=${dateRange.start}&end_date=${dateRange.end}&store=au`)
+      .catch(() => null);
+
+    Promise.all([summaryPromise, fifoPromise])
+      .then(([summaryData, fifoData]) => {
+        setData(summaryData);
+
+        // Build FIFO map by SKU if entries exist
+        if (fifoData && Array.isArray(fifoData) && fifoData.length > 0) {
+          const map = {};
+          for (const e of fifoData) {
+            if (!map[e.sku]) {
+              map[e.sku] = { total_cogs: 0, units_sold: 0, purchase_cost: 0, gd_shipping: 0, scc_handling: 0 };
+            }
+            const qty = e.quantity_sold || 0;
+            const unitCost = parseFloat(e.unit_cost) || 0;
+            const gdShip = parseFloat(e.gd_shipping_per_unit) || 0;
+            const sccHandle = parseFloat(e.scc_handling_per_unit) || 0;
+            map[e.sku].units_sold += qty;
+            map[e.sku].purchase_cost += qty * unitCost;
+            map[e.sku].gd_shipping += qty * gdShip;
+            map[e.sku].scc_handling += qty * sccHandle;
+            map[e.sku].total_cogs += qty * (unitCost + gdShip + sccHandle);
+          }
+          // Round all values
+          for (const sku of Object.keys(map)) {
+            for (const k of Object.keys(map[sku])) {
+              map[sku][k] = Math.round(map[sku][k] * 100) / 100;
+            }
+          }
+          setFifoMap(map);
+          setIsFifo(true);
+        }
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, [dateRange]);
@@ -231,7 +336,7 @@ export default function SalesCogsTab({ dateRange }) {
   const rangeLabel = triggerLabel(dateRange);
   const skuRows    = (data.sku_breakdown || []).filter(r => !(r.sku || '').toLowerCase().includes('x-redo'));
   const totalRev   = skuRows.reduce((s, r) => s + r.revenue, 0);
-  const totalCogs  = skuRows.reduce((s, r) => s + r.cogs, 0);
+  const totalCogs  = skuRows.reduce((s, r) => s + (isFifo && fifoMap[r.sku] ? fifoMap[r.sku].total_cogs : r.cogs), 0);
   const margin     = totalRev > 0 ? Math.round((totalRev - totalCogs) / totalRev * 100) : 0;
 
   return (
@@ -250,7 +355,7 @@ export default function SalesCogsTab({ dateRange }) {
         ))}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
         {[['sku', 'By SKU'], ['order', 'By Order']].map(([key, label]) => (
           <button key={key} onClick={() => setView(key)} style={{
             padding: '6px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer',
@@ -262,13 +367,18 @@ export default function SalesCogsTab({ dateRange }) {
       </div>
 
       {view === 'sku'
-        ? <SkuView data={{ ...data, sku_breakdown: skuRows }} rangeLabel={rangeLabel} />
+        ? <SkuView data={{ ...data, sku_breakdown: skuRows }} rangeLabel={rangeLabel} fifoMap={fifoMap} isFifo={isFifo} />
         : <OrderView dateRange={dateRange} rangeLabel={rangeLabel} />
       }
 
       <div style={{ marginTop: 16, padding: '12px 16px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-        <strong style={{ color: 'var(--text)' }}>Average Cost Method:</strong> Unit cost = weighted average of all purchases.
-        COGS = units sold × average unit cost. Inventory value = units on hand × average unit cost.
+        <strong style={{ color: 'var(--text)' }}>
+          {isFifo ? 'FIFO Cost Method:' : 'Average Cost Method:'}
+        </strong>{' '}
+        {isFifo
+          ? 'Unit cost determined by First-In-First-Out from purchase orders. COGS = purchase cost + GD shipping + SCC handling. Hover COGS values for breakdown.'
+          : 'Unit cost = weighted average of all purchases. COGS = units sold × average unit cost. Inventory value = units on hand × average unit cost.'
+        }
       </div>
     </div>
   );
