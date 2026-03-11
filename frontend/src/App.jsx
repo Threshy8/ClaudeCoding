@@ -3,11 +3,12 @@ import Dashboard from './components/Dashboard';
 import PurchasesTab from './components/PurchasesTab';
 import SalesCogsTab from './components/SalesCogsTab';
 import JournalTab from './components/JournalTab';
+import FulfillmentTab from './components/FulfillmentTab';
 import DateRangePicker from './components/DateRangePicker';
 import { syncShopify } from './api';
 import './App.css';
 
-const TABS = ['Dashboard', 'Stock Purchases', 'Sales & COGS', 'Journal Export'];
+const TABS = ['Dashboard', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Journal Export'];
 
 function defaultRange() {
   const now = new Date();
@@ -106,6 +107,7 @@ export default function App() {
         {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} />}
         {activeTab === 'Stock Purchases' && <PurchasesTab />}
         {activeTab === 'Sales & COGS'   && <SalesCogsTab  dateRange={dateRange} />}
+        {activeTab === '3PL Costs'      && <FulfillmentTab dateRange={dateRange} />}
         {activeTab === 'Journal Export'  && <JournalTab    dateRange={dateRange} />}
       </main>
     </div>

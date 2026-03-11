@@ -7,6 +7,7 @@ const productsRouter = require('./routes/products');
 const syncRouter = require('./routes/sync');
 const cogsRouter = require('./routes/cogs');
 const journalRouter = require('./routes/journal');
+const fulfillmentRouter = require('./routes/fulfillment');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -25,6 +26,7 @@ app.use('/api/products', productsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/cogs', cogsRouter);
 app.use('/api/journal', journalRouter);
+app.use('/api/fulfillment', fulfillmentRouter);
 
 // Health check
 app.get('/health', (req, res) => {
