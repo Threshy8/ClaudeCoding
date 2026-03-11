@@ -198,7 +198,7 @@ router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
 
 Extract all charge line items and return ONLY valid JSON (no markdown, no commentary).
 
-For each line item assign TWO classifications:
+For each line item assign THREE classifications:
 
 1. "category":
    - "inbound"  -> receiving stock, put away, pallet storage, admin order processing receiving, inbound freight, packaging materials for receiving
@@ -208,6 +208,12 @@ For each line item assign TWO classifications:
 2. "cost_type":
    - "variable" -> scales with number of orders/units. Examples: pick & pack per unit, pack label dispatch per unit, admin order processing despatch per order, pick pack ship per unit
    - "fixed"    -> same regardless of order volume. Examples: pallet storage, receiving/put away, inbound freight, delivery/freight charges, general labour, pallet wrapping, packaging materials
+
+3. "variable_type" (only set this for variable cost_type items, otherwise null):
+   - "per_order" -> flat fee charged once per order/dispatch regardless of how many units. Examples: "Admin Order Processing Despatch - 63 @ $4.50", "Pack, label and dispatch - 63 @ $1.50". The quantity matches the number of orders dispatched.
+   - "per_unit"  -> fee charged per individual unit picked/shipped. Examples: "PICK, PACK, SHIP - Per unit - 73 @ $1.00". The description says "per unit" or the quantity matches units shipped (higher than order count).
+
+To distinguish per_order vs per_unit: if the quantity on the line matches the number of dispatch/order processing lines (typically lower number like 63), it's per_order. If it matches the units shipped count (typically higher, like 73), it's per_unit. "Per unit" in the description is a strong signal.
 
 Return this exact JSON structure:
 {
@@ -220,6 +226,7 @@ Return this exact JSON structure:
       "description": "exact description from invoice",
       "category": "inbound|outbound|other",
       "cost_type": "variable|fixed",
+      "variable_type": "per_order|per_unit|null",
       "quantity": number or null,
       "unit_rate": number or null,
       "amount_ex_gst": number,
@@ -228,7 +235,7 @@ Return this exact JSON structure:
   ]
 }
 
-For units_shipped: look for Pack label and dispatch or PICK PACK SHIP lines - the quantity is units shipped.
+For units_shipped: use the quantity from PICK PACK SHIP Per unit line, or Pack label and dispatch line — whichever has the higher quantity (that's the unit count not order count).
 For amounts: use the ex-GST amount.
 Extract ALL line items.`;
 
@@ -282,14 +289,15 @@ router.post('/invoices', async (req, res) => {
   if (invError) return res.status(500).json({ error: invError.message });
 
   const rows = line_items.map(li => ({
-    invoice_id:    invoice.id,
-    description:   li.description,
-    category:      li.category,
-    cost_type:     li.cost_type || 'fixed',
-    quantity:      li.quantity  || null,
-    unit_rate:     li.unit_rate || null,
-    amount_ex_gst: parseFloat(li.amount_ex_gst) || 0,
-    gst:           parseFloat(li.gst) || 0,
+    invoice_id:     invoice.id,
+    description:    li.description,
+    category:       li.category,
+    cost_type:      li.cost_type || 'fixed',
+    variable_type:  li.variable_type || null,
+    quantity:       li.quantity  || null,
+    unit_rate:      li.unit_rate || null,
+    amount_ex_gst:  parseFloat(li.amount_ex_gst) || 0,
+    gst:            parseFloat(li.gst) || 0,
   }));
 
   const { error: liError } = await supabase.from('fulfillment_line_items').insert(rows);
@@ -309,18 +317,42 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
     .single();
   if (invErr) return res.status(500).json({ error: invErr.message });
 
-  // Get variable cost total for this invoice
+  // Get variable cost breakdown — per_order rate and per_unit rate separately
   const { data: lineItems, error: liErr } = await supabase
     .from('fulfillment_line_items')
-    .select('cost_type, amount_ex_gst')
+    .select('cost_type, variable_type, amount_ex_gst, quantity')
     .eq('invoice_id', req.params.id);
   if (liErr) return res.status(500).json({ error: liErr.message });
 
-  const variableTotal = (lineItems || [])
-    .filter(li => li.cost_type === 'variable')
-    .reduce((s, li) => s + parseFloat(li.amount_ex_gst || 0), 0);
+  // Calculate per-order flat fee and per-unit fee from variable line items
+  let perOrderTotal = 0; // total $ for per_order variable charges
+  let perUnitTotal  = 0; // total $ for per_unit variable charges
+  let orderCount    = 0; // number of orders from per_order lines (e.g. 63)
 
-  const variableCostPerUnit = inv.units_shipped > 0 ? variableTotal / inv.units_shipped : 0;
+  for (const li of (lineItems || [])) {
+    if (li.cost_type !== 'variable') continue;
+    const amt = parseFloat(li.amount_ex_gst || 0);
+    if (li.variable_type === 'per_order') {
+      perOrderTotal += amt;
+      // Use the quantity from the first per_order line as order count
+      if (!orderCount && li.quantity) orderCount = parseInt(li.quantity);
+    } else if (li.variable_type === 'per_unit') {
+      perUnitTotal += amt;
+    } else {
+      // Fallback: no variable_type set, treat as per_unit
+      perUnitTotal += amt;
+    }
+  }
+
+  // Rate per order = total per_order charges / number of orders dispatched
+  const ratePerOrder = orderCount > 0 ? perOrderTotal / orderCount : 0;
+  // Rate per unit = total per_unit charges / units shipped
+  const ratePerUnit  = inv.units_shipped > 0 ? perUnitTotal / inv.units_shipped : 0;
+
+  // Fallback to simple average if no variable_type data
+  const variableTotal = perOrderTotal + perUnitTotal;
+  const useFallback   = ratePerOrder === 0 && ratePerUnit === 0;
+  const fallbackRate  = inv.units_shipped > 0 ? variableTotal / inv.units_shipped : 0;
 
   // Use invoice date as period end, go back 7 days as period start (weekly invoice)
   const periodEnd   = inv.invoice_date;
@@ -360,17 +392,30 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
     o.total_revenue += s.quantity_sold * parseFloat(s.sale_price || 0);
   }
 
-  const orders = Object.values(orderMap).map(o => ({
-    ...o,
-    total_revenue:     Math.round(o.total_revenue * 100) / 100,
-    variable_3pl_cost: o.is_scc ? Math.round(o.total_units * variableCostPerUnit * 100) / 100 : 0,
-  }));
+  const orders = Object.values(orderMap).map(o => {
+    let cost = 0;
+    if (o.is_scc) {
+      if (useFallback) {
+        cost = o.total_units * fallbackRate;
+      } else {
+        // Accurate: flat per-order fee + per-unit fee × units
+        cost = ratePerOrder + (o.total_units * ratePerUnit);
+      }
+    }
+    return {
+      ...o,
+      total_revenue:     Math.round(o.total_revenue * 100) / 100,
+      variable_3pl_cost: Math.round(cost * 100) / 100,
+    };
+  });
 
   orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
 
   res.json({
     period: { start: periodStart, end: periodEnd },
-    variable_cost_per_unit: Math.round(variableCostPerUnit * 100) / 100,
+    cost_method: useFallback ? 'average' : 'accurate',
+    rate_per_order: Math.round(ratePerOrder * 100) / 100,
+    rate_per_unit:  Math.round(ratePerUnit  * 100) / 100,
     orders,
   });
 });

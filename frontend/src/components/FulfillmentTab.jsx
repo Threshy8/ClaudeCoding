@@ -242,6 +242,7 @@ function InvoicesView({ dateRange }) {
                   <th>Description</th>
                   <th>Category</th>
                   <th>Cost Type</th>
+                  <th>Variable Type</th>
                   <th className="text-right">Qty</th>
                   <th className="text-right">Rate</th>
                   <th className="text-right">Ex GST</th>
@@ -262,6 +263,17 @@ function InvoicesView({ dateRange }) {
                         options={[['variable','Variable'],['fixed','Fixed']]}
                         color={COST_TYPE_COLOR[li.cost_type]} />
                     </td>
+                    <td>
+                      {li.cost_type === 'variable' ? (
+                        <EditableSelect
+                          value={li.variable_type || 'per_unit'}
+                          onChange={v => updateParsedLine(idx, 'variable_type', v)}
+                          options={[['per_order','Per Order'],['per_unit','Per Unit']]}
+                          color={li.variable_type === 'per_order' ? '#f59e0b' : '#8b5cf6'} />
+                      ) : (
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+                      )}
+                    </td>
                     <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.quantity ?? '—'}</td>
                     <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.unit_rate ? fmt(li.unit_rate) : '—'}</td>
                     <td className="text-right" style={{ fontSize: 13, fontWeight: 500 }}>{fmt(li.amount_ex_gst)}</td>
@@ -271,7 +283,7 @@ function InvoicesView({ dateRange }) {
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border)' }}>
-                  <td colSpan={5} style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>Total</td>
+                  <td colSpan={6} style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>Total</td>
                   <td className="text-right" style={{ fontWeight: 700, fontSize: 14, paddingTop: 10 }}>
                     {fmt(parsed.line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0))}
                   </td>
@@ -359,11 +371,21 @@ function InvoicesView({ dateRange }) {
 
                               {/* Matched Orders */}
                               <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 12 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 6 }}>
                                   Matched Shopify Orders — {matchedOrders[inv.id]?.period
                                     ? `${fmtDate(matchedOrders[inv.id].period.start)} to ${fmtDate(matchedOrders[inv.id].period.end)}`
                                     : ''}
                                 </div>
+                                {matchedOrders[inv.id]?.cost_method === 'accurate' && (
+                                  <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>
+                                      {fmt(matchedOrders[inv.id].rate_per_order)} per order (flat)
+                                    </span>
+                                    <span style={{ fontSize: 12, color: '#8b5cf6', fontWeight: 600 }}>
+                                      + {fmt(matchedOrders[inv.id].rate_per_unit)} per unit
+                                    </span>
+                                  </div>
+                                )}
                                 {loadingOrders === inv.id ? (
                                   <div className="text-muted" style={{ fontSize: 13 }}>Loading orders…</div>
                                 ) : !matchedOrders[inv.id]?.orders?.length ? (
