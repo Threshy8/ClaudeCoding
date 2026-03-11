@@ -78,23 +78,12 @@ function InvoicesView({ dateRange }) {
   const generateSummary = async (parsedData) => {
     setSummaryLoading(true); setInvoiceSummary(null);
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const data = await apiFetch('/api/fulfillment/summarise', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 200,
-          messages: [{
-            role: 'user',
-            content: `Summarise this 3PL invoice for The Watch Box Co. (Southern Cross Cargo) in 2 sentences max. Plain English, business-like. Mention the key cost types and total. Flag anything unusual like one-off fees or large labour charges.
-
-Date: ${parsedData.invoice_date} | Period: ${parsedData.period_description || 'N/A'} | Units: ${parsedData.units_shipped || 'N/A'} | Total ex GST: $${parsedData.total_ex_gst}
-Line items: ${parsedData.line_items.map(li => `${li.description} $${li.amount_ex_gst} (${li.cost_type})`).join(' | ')}`
-          }]
-        })
+        body: JSON.stringify(parsedData),
       });
-      const data = await res.json();
-      setInvoiceSummary(data.content?.find(b => b.type === 'text')?.text || '');
+      setInvoiceSummary(data.summary || '');
     } catch (e) { /* non-critical */ }
     finally { setSummaryLoading(false); }
   };

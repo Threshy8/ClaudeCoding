@@ -305,4 +305,24 @@ router.delete('/invoices/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// ── POST /api/fulfillment/summarise ───────────────────────────────────────────
+router.post('/summarise', async (req, res) => {
+  const { invoice_date, period_description, units_shipped, total_ex_gst, line_items } = req.body;
+  if (!line_items?.length) return res.status(400).json({ error: 'No line items' });
+
+  const msg = await anthropic.messages.create({
+    model: 'claude-opus-4-6',
+    max_tokens: 200,
+    messages: [{
+      role: 'user',
+      content: `Summarise this 3PL invoice for The Watch Box Co. (Southern Cross Cargo) in 2 sentences max. Plain English, business-like. Mention the key cost types and total. Flag anything unusual like one-off fees or large labour charges.
+
+Date: ${invoice_date} | Period: ${period_description || 'N/A'} | Units shipped: ${units_shipped || 'N/A'} | Total ex GST: $${total_ex_gst}
+Line items: ${line_items.map(li => `${li.description} $${li.amount_ex_gst} (${li.cost_type})`).join(' | ')}`
+    }]
+  });
+
+  res.json({ summary: msg.content[0]?.text || '' });
+});
+
 module.exports = router;
