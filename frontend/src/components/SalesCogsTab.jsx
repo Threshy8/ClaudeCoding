@@ -131,7 +131,7 @@ function OrderView({ dateRange, rangeLabel }) {
           <table>
             <thead>
               <tr>
-                <th>Date</th><th>Order #</th><th>SKUs</th><th>Via</th>
+                <th>Date</th><th>Order #</th><th>Customer</th><th>SKUs</th><th>Via</th>
                 <th className="text-right">Units</th><th className="text-right">Revenue</th>
                 <th className="text-right">COGS</th><th className="text-right">Gross Profit</th>
                 <th className="text-right">Margin %</th><th></th>
@@ -143,6 +143,7 @@ function OrderView({ dateRange, rangeLabel }) {
                   <tr style={{ borderBottom: expandedId === o.shopify_order_id ? 'none' : '1px solid var(--border)' }}>
                     <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fmtDate(o.order_date)}</td>
                     <td><span className="mono" style={{ fontSize: 12 }}>#{o.order_number}</span></td>
+                    <td style={{ fontSize: 13 }}>{o.customer_name || '—'}</td>
                     <td style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {o.line_items.map(li => li.sku).join(', ')}
                     </td>
@@ -161,7 +162,7 @@ function OrderView({ dateRange, rangeLabel }) {
                   </tr>
                   {expandedId === o.shopify_order_id && (
                     <tr>
-                      <td colSpan={10} style={{ padding: '0 0 8px 0', background: 'var(--bg-subtle)' }}>
+                      <td colSpan={11} style={{ padding: '0 0 8px 0', background: 'var(--bg-subtle)' }}>
                         <div style={{ padding: '10px 16px' }}>
                           <table style={{ fontSize: 12, width: '100%' }}>
                             <thead>
@@ -191,7 +192,7 @@ function OrderView({ dateRange, rangeLabel }) {
             </tbody>
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
-                <td colSpan={4} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL ({orders.length} orders)</td>
+                <td colSpan={5} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL ({orders.length} orders)</td>
                 <td className="text-right">{orders.reduce((s, o) => s + o.total_units, 0)}</td>
                 <td className="text-right">{fmt(totalRev)}</td>
                 <td className="text-right">{fmt(totalCogs)}</td>

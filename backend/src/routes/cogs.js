@@ -299,7 +299,7 @@ router.get('/orders', async (req, res) => {
   // Get all sales in period grouped by order
   const { data: sales, error: sErr } = await supabase
     .from('shopify_sales')
-    .select('shopify_order_id, order_number, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
+    .select('shopify_order_id, order_number, customer_name, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
     .gte('order_date', start_date)
     .lte('order_date', end_date)
     .eq('store', store)
@@ -309,11 +309,12 @@ router.get('/orders', async (req, res) => {
   // Group by order
   const orderMap = {};
   for (const s of (sales || [])) {
-    if ((s.sku || '').toLowerCase().includes('x-redo')) continue; // exclude non-physical
+    if ((s.sku || '').toLowerCase().includes('x-redo')) continue;
     if (!orderMap[s.shopify_order_id]) {
       orderMap[s.shopify_order_id] = {
         shopify_order_id:     s.shopify_order_id,
         order_number:         s.order_number || s.shopify_order_id,
+        customer_name:        s.customer_name || '—',
         order_date:           s.order_date,
         fulfillment_location: s.fulfillment_location || 'Unknown',
         line_items: [],

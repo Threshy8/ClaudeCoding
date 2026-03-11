@@ -231,10 +231,15 @@ router.post('/shopify', async (req, res) => {
         bySku[sku].revenue += lineGross * scale;
       }
 
+      const customerName = order.customer
+        ? [order.customer.first_name, order.customer.last_name].filter(Boolean).join(' ')
+        : (order.billing_address?.name || null);
+
       for (const [sku, d] of Object.entries(bySku)) {
         salesRecords.push({
           shopify_order_id: String(order.id),
           order_number:     order.order_number ? String(order.order_number) : null,
+          customer_name:    customerName || null,
           sku,
           product_name: d.product_name,
           quantity_sold: d.qty,
