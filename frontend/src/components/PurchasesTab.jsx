@@ -108,14 +108,45 @@ function PurchaseOrdersView() {
     setParsedMeta(null);
 
     try {
-      const reader = new FileReader();
-      const base64 = await new Promise((resolve, reject) => {
-        reader.onload = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      const isPdf = file.type === 'application/pdf';
+      let base64;
+      let mediaType;
 
-      const mediaType = file.type || 'image/jpeg';
+      if (isPdf) {
+        // PDFs: read as-is
+        base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        mediaType = 'application/pdf';
+      } else {
+        // Images: compress via canvas (max 1500px, JPEG q0.7)
+        const imgUrl = URL.createObjectURL(file);
+        const img = await new Promise((resolve, reject) => {
+          const i = new Image();
+          i.onload = () => resolve(i);
+          i.onerror = reject;
+          i.src = imgUrl;
+        });
+        const MAX = 1500;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          const scale = MAX / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        URL.revokeObjectURL(imgUrl);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        base64 = dataUrl.split(',')[1];
+        mediaType = 'image/jpeg';
+      }
+
       const data = await apiFetch('/api/purchases/parse-invoice', {
         method: 'POST',
         body: JSON.stringify({ image_base64: base64, media_type: mediaType }),
