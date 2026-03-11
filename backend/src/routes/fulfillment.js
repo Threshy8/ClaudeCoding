@@ -142,7 +142,8 @@ router.get('/order-cost-sheet', async (req, res) => {
     ? (allSales || []).filter(s => s.fulfillment_location === location)
     : (allSales || []);
 
-  // 5. Group filtered sales by order
+  // 5. Group filtered sales by order — exclude non-physical SKUs from unit counts
+  const XREDO_SKUS = ['x-redo', 'x-return', 'x-exchange'];
   const orderMap = {};
   for (const s of filteredSales) {
     if (!orderMap[s.shopify_order_id]) {
@@ -156,8 +157,9 @@ router.get('/order-cost-sheet', async (req, res) => {
       };
     }
     const o = orderMap[s.shopify_order_id];
+    const isNonPhysical = XREDO_SKUS.some(x => (s.sku || '').toLowerCase().includes(x));
     o.line_items.push({ sku: s.sku, product_name: s.product_name, quantity: s.quantity_sold });
-    o.total_units   += s.quantity_sold;
+    if (!isNonPhysical) o.total_units += s.quantity_sold;
     o.total_revenue += s.quantity_sold * parseFloat(s.sale_price || 0);
   }
 
@@ -371,6 +373,13 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
   if (salesErr) return res.status(500).json({ error: salesErr.message });
 
   // Group by order
+  const XREDO_SKUS = ['x-redo', 'x-return', 'x-exchange']; // non-physical SKUs to exclude from unit counts
+  const isSCC = (location) => {
+    const loc = (location || '').toLowerCase();
+    return loc.includes('southern cross') || loc.includes('scc') || loc.includes('beverley');
+    // Note: 'manual' is NOT SCC — that's self-fulfilled from home
+  };
+
   const orderMap = {};
   for (const s of (sales || [])) {
     if (!orderMap[s.shopify_order_id]) {
@@ -378,17 +387,16 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
         shopify_order_id:     s.shopify_order_id,
         order_date:           s.order_date,
         fulfillment_location: s.fulfillment_location || 'Unknown',
-        is_scc:               (s.fulfillment_location || '').toLowerCase().includes('southern cross') ||
-                              (s.fulfillment_location || '').toLowerCase().includes('scc') ||
-                              (s.fulfillment_location || '').toLowerCase().includes('manual'),
+        is_scc:               isSCC(s.fulfillment_location),
         line_items:           [],
-        total_units:          0,
+        total_units:          0,  // physical units only (no x-redo)
         total_revenue:        0,
       };
     }
     const o = orderMap[s.shopify_order_id];
+    const isNonPhysical = XREDO_SKUS.some(x => (s.sku || '').toLowerCase().includes(x));
     o.line_items.push({ sku: s.sku, product_name: s.product_name, quantity: s.quantity_sold });
-    o.total_units   += s.quantity_sold;
+    if (!isNonPhysical) o.total_units += s.quantity_sold;
     o.total_revenue += s.quantity_sold * parseFloat(s.sale_price || 0);
   }
 
