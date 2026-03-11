@@ -256,6 +256,8 @@ router.post('/shopify', async (req, res) => {
       if (order.cancelled_at) continue;
       if (order.currency !== 'AUD') continue;
 
+      const orderDate = toStoreDate(order.created_at);
+
       // Build line_item_id → {sku, product_name} lookup for this order
       const lineItemMap = {};
       for (const li of (order.line_items || [])) {
