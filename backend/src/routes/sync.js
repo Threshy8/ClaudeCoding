@@ -187,6 +187,21 @@ router.post('/shopify', async (req, res) => {
       // Use total_price (gross, before any refunds) — refund amounts tracked separately
       const orderTotal = parseFloat(order.total_price || '0') || 0;
 
+      // Fulfillment location: Shopify embeds location name in fulfillments[].location_id
+      // but not the name directly. Best available signals in order payload:
+      //   1. fulfillments[0].origin_address.name  (set on some plans)
+      //   2. order.assigned_location.name          (on some Shopify plans)
+      //   3. fulfillments[0].service               (e.g. "manual", carrier name)
+      //   4. Fall back to 'Unfulfilled' / 'Unknown'
+      const firstFulfillment = (order.fulfillments || [])[0];
+      const assignedLocation =
+        firstFulfillment?.origin_address?.name ||
+        order.assigned_location?.name          ||
+        order.location?.name                   ||
+        (firstFulfillment ? firstFulfillment.service || `location_${firstFulfillment.location_id}` : null) ||
+        (order.fulfillment_status == null || order.fulfillment_status === 'unfulfilled'
+          ? 'Unfulfilled' : 'Unknown Location');
+
       const lineItems = order.line_items || [];
       const lines = [];
       let grossLineTotal = 0;
@@ -225,6 +240,7 @@ router.post('/shopify', async (req, res) => {
           sale_price: Math.round((d.revenue / d.qty) * 100) / 100,
           order_date: orderDate,
           store,
+          fulfillment_location: assignedLocation,
         });
       }
     }

@@ -344,34 +344,70 @@ function InvoicesView({ dateRange }) {
 
 // ─── Order Cost Sheet View ────────────────────────────────────────────────────
 function CostSheetView({ dateRange }) {
-  const [data, setData]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
+  const [data, setData]             = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState(null);
   const [expandedOrder, setExpandedOrder] = useState(null);
+  const [selectedLocation, setSelectedLocation] = useState('all');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (location) => {
     if (!dateRange?.start || !dateRange?.end) return;
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams({ start_date: dateRange.start, end_date: dateRange.end });
+      if (location && location !== 'all') params.set('location', location);
       const res = await apiFetch(`/api/fulfillment/order-cost-sheet?${params}`);
       setData(res);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }, [dateRange]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(selectedLocation); }, [load, selectedLocation]);
+
+  const handleLocationChange = (loc) => {
+    setSelectedLocation(loc);
+    setExpandedOrder(null);
+  };
 
   if (loading) return <div className="loading">Loading cost sheet…</div>;
   if (error)   return <div className="error-msg">{error}</div>;
   if (!data)   return null;
 
-  const { fixed_costs, variable_costs, orders, grand_total_3pl } = data;
+  const { fixed_costs, variable_costs, orders, grand_total_3pl, available_locations } = data;
   const noFulfillmentData = fixed_costs.total === 0 && variable_costs.total === 0;
 
   return (
     <div>
-      {/* Top summary */}
+      {/* Location filter */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+        <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 500 }}>Filter by location:</span>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {['all', ...(available_locations || [])].map(loc => (
+            <button
+              key={loc}
+              onClick={() => handleLocationChange(loc)}
+              style={{
+                padding: '5px 14px',
+                borderRadius: 20,
+                border: selectedLocation === loc ? '1.5px solid var(--accent)' : '1.5px solid var(--border)',
+                background: selectedLocation === loc ? 'var(--accent-dim)' : 'transparent',
+                color: selectedLocation === loc ? 'var(--accent)' : 'var(--text-muted)',
+                fontWeight: selectedLocation === loc ? 600 : 400,
+                fontSize: 12,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {loc === 'all' ? 'All Locations' : loc}
+            </button>
+          ))}
+        </div>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 4 }}>
+          {orders.length} order{orders.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Summary cards */}
       <div className="stats-grid" style={{ marginBottom: 24 }}>
         <div className="stat-card">
           <div className="stat-label">Grand Total 3PL</div>
@@ -381,26 +417,32 @@ function CostSheetView({ dateRange }) {
         <div className="stat-card">
           <div className="stat-label">Fixed Costs (One-time)</div>
           <div className="stat-value" style={{ color: COST_TYPE_COLOR.fixed }}>{fmt(fixed_costs.total)}</div>
-          <div className="stat-sub">Period cost, not per order</div>
+          <div className="stat-sub">Storage, receiving, freight</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Variable Cost / Unit</div>
           <div className="stat-value" style={{ color: COST_TYPE_COLOR.variable }}>
             {variable_costs.cost_per_unit > 0 ? fmt(variable_costs.cost_per_unit) : '—'}
           </div>
-          <div className="stat-sub">{variable_costs.units_shipped > 0 ? `${variable_costs.units_shipped} units · ${fmt(variable_costs.total)} total` : 'No invoice data'}</div>
+          <div className="stat-sub">
+            {variable_costs.units_shipped > 0
+              ? `${variable_costs.units_shipped} units · ${fmt(variable_costs.total)} total`
+              : 'No invoice data'}
+          </div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Orders in Period</div>
+          <div className="stat-label">Orders Shown</div>
           <div className="stat-value">{orders.length}</div>
-          <div className="stat-sub">From Shopify AU</div>
+          <div className="stat-sub">
+            {selectedLocation === 'all' ? 'All locations' : selectedLocation}
+          </div>
         </div>
       </div>
 
       {noFulfillmentData && (
         <div className="card" style={{ marginBottom: 20, padding: '14px 20px', borderLeft: '3px solid var(--accent)', background: 'var(--accent-dim)' }}>
           <div style={{ fontSize: 13, color: 'var(--accent)', fontWeight: 500 }}>
-            No 3PL invoices uploaded for this period yet — upload invoices in the Invoices tab to see cost allocations.
+            No 3PL invoices uploaded for this period — upload invoices in the Invoices tab to see cost allocations.
           </div>
         </div>
       )}
@@ -412,7 +454,7 @@ function CostSheetView({ dateRange }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>Fixed / One-Time Costs</div>
-                <div className="text-muted" style={{ fontSize: 12, marginTop: 2 }}>Period costs not allocated to individual orders</div>
+                <div className="text-muted" style={{ fontSize: 12, marginTop: 2 }}>Period costs — not allocated per order</div>
               </div>
               <div style={{ fontWeight: 700, fontSize: 18, color: COST_TYPE_COLOR.fixed }}>{fmt(fixed_costs.total)}</div>
             </div>
@@ -456,7 +498,7 @@ function CostSheetView({ dateRange }) {
 
       <div className="card">
         {orders.length === 0 ? (
-          <div className="empty">No Shopify orders found in this period.</div>
+          <div className="empty">No orders found for the selected location and period.</div>
         ) : (
           <div className="table-wrap">
             <table>
@@ -464,6 +506,7 @@ function CostSheetView({ dateRange }) {
                 <tr>
                   <th>Date</th>
                   <th>Order #</th>
+                  <th>Location</th>
                   <th>Items</th>
                   <th className="text-right">Units</th>
                   <th className="text-right">Revenue</th>
@@ -476,10 +519,17 @@ function CostSheetView({ dateRange }) {
                   <React.Fragment key={order.shopify_order_id}>
                     <tr>
                       <td className="text-muted">{fmtDate(order.order_date)}</td>
+                      <td><span className="mono" style={{ fontSize: 12 }}>#{order.shopify_order_id}</span></td>
                       <td>
-                        <span className="mono" style={{ fontSize: 12 }}>#{order.shopify_order_id}</span>
+                        <span style={{
+                          fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                          background: 'var(--bg-subtle)', color: 'var(--text-muted)',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {order.fulfillment_location || '—'}
+                        </span>
                       </td>
-                      <td style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 220 }}>
+                      <td style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 200 }}>
                         {order.line_items.map(li => `${li.sku} ×${li.quantity}`).join(', ')}
                       </td>
                       <td className="text-right">{order.total_units}</td>
@@ -499,15 +549,14 @@ function CostSheetView({ dateRange }) {
                     </tr>
                     {expandedOrder === order.shopify_order_id && (
                       <tr>
-                        <td colSpan={7} style={{ padding: 0, background: 'var(--bg-subtle)' }}>
+                        <td colSpan={8} style={{ padding: 0, background: 'var(--bg-subtle)' }}>
                           <div style={{ padding: '10px 20px' }}>
                             <table style={{ fontSize: 12, width: '100%' }}>
                               <thead>
                                 <tr>
-                                  <th style={{ textAlign: 'left', paddingBottom: 4, color: 'var(--text-muted)', fontWeight: 500 }}>SKU</th>
-                                  <th style={{ textAlign: 'left', paddingBottom: 4, color: 'var(--text-muted)', fontWeight: 500 }}>Product</th>
-                                  <th style={{ textAlign: 'right', paddingBottom: 4, color: 'var(--text-muted)', fontWeight: 500 }}>Qty</th>
-                                  <th style={{ textAlign: 'right', paddingBottom: 4, color: 'var(--text-muted)', fontWeight: 500 }}>3PL Cost</th>
+                                  {['SKU', 'Product', 'Qty', '3PL Cost'].map((h, i) => (
+                                    <th key={h} style={{ textAlign: i >= 2 ? 'right' : 'left', paddingBottom: 4, color: 'var(--text-muted)', fontWeight: 500 }}>{h}</th>
+                                  ))}
                                 </tr>
                               </thead>
                               <tbody>
@@ -532,7 +581,7 @@ function CostSheetView({ dateRange }) {
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}>
-                  <td colSpan={3} style={{ paddingTop: 10 }}>Total</td>
+                  <td colSpan={4} style={{ paddingTop: 10 }}>Total</td>
                   <td className="text-right" style={{ paddingTop: 10 }}>{orders.reduce((s, o) => s + o.total_units, 0)}</td>
                   <td className="text-right" style={{ paddingTop: 10 }}>{fmt(orders.reduce((s, o) => s + o.total_revenue, 0))}</td>
                   <td className="text-right" style={{ paddingTop: 10, color: COST_TYPE_COLOR.variable }}>

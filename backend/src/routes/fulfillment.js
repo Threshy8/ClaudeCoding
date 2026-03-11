@@ -81,22 +81,21 @@ router.get('/summary', async (req, res) => {
 
 // ── GET /api/fulfillment/order-cost-sheet ─────────────────────────────────────
 router.get('/order-cost-sheet', async (req, res) => {
-  const { start_date, end_date } = req.query;
+  const { start_date, end_date, location } = req.query;
   if (!start_date || !end_date)
     return res.status(400).json({ error: 'start_date and end_date required' });
 
+  // 1. Get 3PL invoice costs for period
   let variableCostTotal = 0;
   let fixedCostTotal    = 0;
   let fixedLineItems    = [];
   let totalUnitsShipped = 0;
 
-  let invQuery = supabase
+  const { data: invoices, error: invErr } = await supabase
     .from('fulfillment_invoices')
     .select('id, units_shipped')
     .gte('invoice_date', start_date)
     .lte('invoice_date', end_date);
-
-  const { data: invoices, error: invErr } = await invQuery;
   if (invErr) return res.status(500).json({ error: invErr.message });
 
   if (invoices && invoices.length > 0) {
@@ -121,25 +120,39 @@ router.get('/order-cost-sheet', async (req, res) => {
 
   const variableCostPerUnit = totalUnitsShipped > 0 ? variableCostTotal / totalUnitsShipped : 0;
 
-  const { data: sales, error: salesErr } = await supabase
+  // 2. Fetch all sales in period (including fulfillment_location)
+  const { data: allSales, error: salesErr } = await supabase
     .from('shopify_sales')
-    .select('shopify_order_id, sku, product_name, quantity_sold, sale_price, order_date')
+    .select('shopify_order_id, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
     .gte('order_date', start_date)
     .lte('order_date', end_date)
     .eq('store', 'au')
     .order('order_date', { ascending: false });
-
   if (salesErr) return res.status(500).json({ error: salesErr.message });
 
+  // 3. Build unique location list for frontend filter dropdown
+  const locationSet = new Set();
+  for (const s of (allSales || [])) {
+    if (s.fulfillment_location) locationSet.add(s.fulfillment_location);
+  }
+  const availableLocations = Array.from(locationSet).sort();
+
+  // 4. Apply location filter — 'all' or empty = show everything
+  const filteredSales = (location && location !== 'all')
+    ? (allSales || []).filter(s => s.fulfillment_location === location)
+    : (allSales || []);
+
+  // 5. Group filtered sales by order
   const orderMap = {};
-  for (const s of (sales || [])) {
+  for (const s of filteredSales) {
     if (!orderMap[s.shopify_order_id]) {
       orderMap[s.shopify_order_id] = {
-        shopify_order_id: s.shopify_order_id,
-        order_date: s.order_date,
-        line_items: [],
-        total_units: 0,
-        total_revenue: 0,
+        shopify_order_id:     s.shopify_order_id,
+        order_date:           s.order_date,
+        fulfillment_location: s.fulfillment_location || 'Unknown',
+        line_items:           [],
+        total_units:          0,
+        total_revenue:        0,
       };
     }
     const o = orderMap[s.shopify_order_id];
@@ -151,13 +164,16 @@ router.get('/order-cost-sheet', async (req, res) => {
   const orders = Object.values(orderMap).map(o => ({
     ...o,
     total_revenue:     Math.round(o.total_revenue * 100) / 100,
+    // Only allocate variable cost if this is a 3PL-fulfilled order (or showing all)
     variable_3pl_cost: Math.round(o.total_units * variableCostPerUnit * 100) / 100,
   }));
 
   orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
 
   res.json({
-    period: { start_date, end_date },
+    period:             { start_date, end_date },
+    available_locations: availableLocations,
+    selected_location:  location || 'all',
     fixed_costs: {
       total:      Math.round(fixedCostTotal * 100) / 100,
       line_items: fixedLineItems,
