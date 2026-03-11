@@ -96,12 +96,8 @@ function PurchaseOrdersView() {
     }
   };
 
-  // Invoice upload
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-
+  // Shared: compress image (or pass-through PDF) then send to parse endpoint
+  const processFile = async (file) => {
     setUploading(true);
     setUploadError(null);
     setParsed(null);
@@ -176,6 +172,29 @@ function PurchaseOrdersView() {
     }
   };
 
+  // Invoice upload via file picker
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    processFile(file);
+  };
+
+  // Paste from clipboard (Cmd+V / Ctrl+V)
+  const handlePaste = (e) => {
+    if (uploading) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) processFile(file);
+        return;
+      }
+    }
+  };
+
   // Edit parsed row
   const updateParsedRow = (idx, field, value) => {
     setParsed(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
@@ -231,23 +250,28 @@ function PurchaseOrdersView() {
   return (
     <div>
       {/* Upload section */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>Purchase Orders</div>
-          {!loading && (
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-              {orders.length} POs · Total value: {fmt(totalValue)}
-            </div>
-          )}
+      <div tabIndex={0} onPaste={handlePaste} style={{ outline: 'none', marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Purchase Orders</div>
+            {!loading && (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                {orders.length} POs · Total value: {fmt(totalValue)}
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <label style={{
+              padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              background: 'var(--accent)', color: '#fff', border: 'none',
+              opacity: uploading ? 0.6 : 1,
+            }}>
+              {uploading ? 'Parsing…' : '+ Upload Invoice'}
+              <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} hidden disabled={uploading} />
+            </label>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Upload, drag & drop, or paste an image (Cmd+V)</span>
+          </div>
         </div>
-        <label style={{
-          padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          background: 'var(--accent)', color: '#fff', border: 'none',
-          opacity: uploading ? 0.6 : 1,
-        }}>
-          {uploading ? 'Parsing…' : '+ Upload Invoice'}
-          <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} hidden disabled={uploading} />
-        </label>
       </div>
 
       {uploadError && <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12, padding: '8px 12px', background: 'rgba(239,68,68,0.08)', borderRadius: 8 }}>{uploadError}</div>}
