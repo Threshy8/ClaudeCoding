@@ -28,7 +28,7 @@ function PasswordGate({ onUnlock }) {
     e.preventDefault();
     if (input === APP_PASSWORD) {
       sessionStorage.setItem('wbc_auth', '1');
-      onUnlock();
+      window.location.reload();
     } else {
       setError(true);
       setInput('');
