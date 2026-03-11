@@ -331,6 +331,7 @@ function InvoicesView({ dateRange }) {
                     <th className="text-right">Variable</th>
                     <th className="text-right">Total Ex GST</th>
                     <th className="text-right">Inc GST</th>
+                    <th>Payment</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -353,6 +354,11 @@ function InvoicesView({ dateRange }) {
                         <td className="text-right" style={{ fontWeight: 600 }}>{fmt(inv.total_ex_gst)}</td>
                         <td className="text-right text-muted">{fmt(inv.total_inc_gst)}</td>
                         <td onClick={e => e.stopPropagation()}>
+                          <PaymentStatusCell inv={inv} onUpdate={(updated) => {
+                            setInvoices(prev => prev.map(i => i.id === updated.id ? { ...i, ...updated } : i));
+                          }} />
+                        </td>
+                        <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 6 }}>
                             <button className="btn btn-ghost btn-sm" onClick={() => toggleExpand(inv.id)} style={{ fontSize: 12 }}>
                               {expandedId === inv.id ? '▲ Hide' : '▼ Lines'}
@@ -363,7 +369,7 @@ function InvoicesView({ dateRange }) {
                       </tr>
                       {expandedId === inv.id && (
                         <tr>
-                          <td colSpan={8} style={{ padding: 0, background: 'var(--bg-subtle)' }}>
+                          <td colSpan={9} style={{ padding: 0, background: 'var(--bg-subtle)' }}>
                             <div style={{ padding: '12px 20px' }}>
                               {loadingLines === inv.id
                                 ? <div className="text-muted" style={{ fontSize: 13, padding: 8 }}>Loading…</div>
@@ -707,6 +713,78 @@ function CostSheetView({ dateRange }) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+function PaymentStatusCell({ inv, onUpdate }) {
+  const [loading, setLoading] = useState(false);
+  const status = inv.payment_status || 'unpaid';
+
+  // Auto-flag overdue: unpaid + due date passed (invoice_date + 14 days)
+  const dueDate = new Date(inv.invoice_date);
+  dueDate.setDate(dueDate.getDate() + 14);
+  const isOverdue = status === 'unpaid' && new Date() > dueDate;
+  const effectiveStatus = isOverdue ? 'overdue' : status;
+
+  const CONFIG = {
+    paid:    { label: 'Paid',    bg: '#22c55e18', color: '#16a34a', border: '#22c55e40' },
+    unpaid:  { label: 'Unpaid',  bg: '#f59e0b18', color: '#d97706', border: '#f59e0b40' },
+    overdue: { label: 'Overdue', bg: '#ef444418', color: '#dc2626', border: '#ef444440' },
+  };
+
+  const cfg = CONFIG[effectiveStatus];
+
+  const update = async (newStatus) => {
+    setLoading(true);
+    try {
+      const data = await apiFetch(`/api/fulfillment/invoices/${inv.id}/payment`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_status: newStatus }),
+      });
+      onUpdate(data);
+    } catch (e) { alert('Update failed: ' + e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 120 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+          background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`,
+          textTransform: 'uppercase', letterSpacing: '0.06em',
+        }}>
+          {cfg.label}
+        </span>
+        {status === 'paid' && inv.paid_date && (
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(inv.paid_date)}</span>
+        )}
+        {effectiveStatus === 'overdue' && (
+          <span style={{ fontSize: 11, color: '#dc2626' }}>Due {fmtDate(dueDate.toISOString().split('T')[0])}</span>
+        )}
+      </div>
+      {status !== 'paid' && (
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ fontSize: 11, padding: '2px 8px', color: '#16a34a', borderColor: '#22c55e40' }}
+          onClick={() => update('paid')}
+          disabled={loading}
+        >
+          {loading ? '…' : '✓ Mark Paid'}
+        </button>
+      )}
+      {status === 'paid' && (
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ fontSize: 11, padding: '2px 8px', color: 'var(--text-muted)' }}
+          onClick={() => update('unpaid')}
+          disabled={loading}
+        >
+          {loading ? '…' : 'Undo'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function EditableSelect({ value, onChange, options, color }) {
   return (
     <select

@@ -435,6 +435,31 @@ router.delete('/invoices/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// ── PATCH /api/fulfillment/invoices/:id/payment ───────────────────────────────
+router.patch('/invoices/:id/payment', async (req, res) => {
+  const { payment_status, paid_date } = req.body;
+  const validStatuses = ['unpaid', 'paid', 'overdue'];
+  if (!validStatuses.includes(payment_status))
+    return res.status(400).json({ error: 'Invalid payment_status' });
+
+  const update = {
+    payment_status,
+    paid_date: payment_status === 'paid'
+      ? (paid_date || new Date().toISOString().split('T')[0])
+      : null,
+  };
+
+  const { data, error } = await supabase
+    .from('fulfillment_invoices')
+    .update(update)
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 // ── POST /api/fulfillment/summarise ───────────────────────────────────────────
 router.post('/summarise', async (req, res) => {
   const { invoice_date, period_description, units_shipped, total_ex_gst, line_items } = req.body;
