@@ -284,12 +284,14 @@ router.post('/shopify', async (req, res) => {
           if (d.quantity <= 0) continue;
           refundRecords.push({
             shopify_order_id: String(order.id),
+            order_number:     order.order_number ? String(order.order_number) : null,
             shopify_refund_id: String(refund.id),
             sku,
             product_name: d.product_name,
             quantity_refunded: d.quantity,
             refund_subtotal: Math.round(d.subtotal * 100) / 100,
-            refund_date: refundDate,
+            order_date:   orderDate,
+            refund_date:  refundDate,
             store,
           });
         }

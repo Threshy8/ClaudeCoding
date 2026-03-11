@@ -272,5 +272,24 @@ router.get('/debug', async (req, res) => {
   });
 });
 
+// ── GET /api/cogs/refunds ─────────────────────────────────────────────────────
+// Returns all refunds with order date, refund date, SKU, qty, subtotal
+router.get('/refunds', async (req, res) => {
+  const { start_date, end_date, store = 'au' } = req.query;
+
+  let query = supabase
+    .from('shopify_refunds')
+    .select('shopify_order_id, order_number, shopify_refund_id, sku, product_name, quantity_refunded, refund_subtotal, order_date, refund_date, store')
+    .eq('store', store)
+    .order('refund_date', { ascending: false });
+
+  if (start_date) query = query.gte('refund_date', start_date);
+  if (end_date)   query = query.lte('refund_date', end_date);
+
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 module.exports = router;
 module.exports.buildCogsData = buildCogsData;
