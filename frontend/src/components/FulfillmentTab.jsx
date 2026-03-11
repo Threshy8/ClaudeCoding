@@ -71,7 +71,33 @@ function InvoicesView({ dateRange }) {
   const [uploadError, setUploadError]   = useState(null);
   const [parsed, setParsed]             = useState(null);
   const [saving, setSaving]             = useState(false);
+  const [invoiceSummary, setInvoiceSummary]   = useState(null);
+  const [summaryLoading, setSummaryLoading]   = useState(false);
   const fileRef = useRef();
+
+  const generateSummary = async (parsedData) => {
+    setSummaryLoading(true); setInvoiceSummary(null);
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 200,
+          messages: [{
+            role: 'user',
+            content: `Summarise this 3PL invoice for The Watch Box Co. (Southern Cross Cargo) in 2 sentences max. Plain English, business-like. Mention the key cost types and total. Flag anything unusual like one-off fees or large labour charges.
+
+Date: ${parsedData.invoice_date} | Period: ${parsedData.period_description || 'N/A'} | Units: ${parsedData.units_shipped || 'N/A'} | Total ex GST: $${parsedData.total_ex_gst}
+Line items: ${parsedData.line_items.map(li => `${li.description} $${li.amount_ex_gst} (${li.cost_type})`).join(' | ')}`
+          }]
+        })
+      });
+      const data = await res.json();
+      setInvoiceSummary(data.content?.find(b => b.type === 'text')?.text || '');
+    } catch (e) { /* non-critical */ }
+    finally { setSummaryLoading(false); }
+  };
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -110,7 +136,9 @@ function InvoicesView({ dateRange }) {
       formData.append('pdf', file);
       const res = await fetch(`${BASE_URL}/api/fulfillment/parse-pdf`, { method: 'POST', body: formData });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Parse failed'); }
-      setParsed(await res.json());
+      const result = await res.json();
+      setParsed(result);
+      generateSummary(result);
     } catch (err) { setUploadError(err.message); }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = ''; }
   };
@@ -123,7 +151,7 @@ function InvoicesView({ dateRange }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed),
       });
-      setParsed(null); load();
+      setParsed(null); setInvoiceSummary(null); load();
     } catch (e) { setUploadError(e.message); }
     finally { setSaving(false); }
   };
@@ -147,29 +175,21 @@ function InvoicesView({ dateRange }) {
 
   return (
     <div>
-      {/* Summary cards */}
+      {/* Summary cards — improved */}
       {summary && (
-        <div className="stats-grid" style={{ marginBottom: 24 }}>
-          <div className="stat-card">
-            <div className="stat-label">Total 3PL Cost</div>
-            <div className="stat-value">{fmt(summary.total)}</div>
-            <div className="stat-sub">Ex GST · {dateRange?.label || 'Period'}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Fixed Costs</div>
-            <div className="stat-value" style={{ color: COST_TYPE_COLOR.fixed }}>{fmt(summary.fixed)}</div>
-            <div className="stat-sub">Storage, receiving, freight</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Variable Costs</div>
-            <div className="stat-value" style={{ color: COST_TYPE_COLOR.variable }}>{fmt(summary.variable)}</div>
-            <div className="stat-sub">Pick/pack, dispatch per order</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Variable Cost / Unit</div>
-            <div className="stat-value">{summary.cost_per_unit > 0 ? fmt(summary.cost_per_unit) : '—'}</div>
-            <div className="stat-sub">{summary.units_shipped > 0 ? `${summary.units_shipped} units shipped` : 'No units data'}</div>
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+          {[
+            { label: 'Total 3PL Cost', value: fmt(summary.total), sub: `Ex GST · ${dateRange?.label || 'Period'}`, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
+            { label: 'Fixed Costs', value: fmt(summary.fixed), sub: 'Storage, receiving, labour', color: COST_TYPE_COLOR.fixed, bg: `${COST_TYPE_COLOR.fixed}0f` },
+            { label: 'Variable Costs', value: fmt(summary.variable), sub: 'Pick/pack, dispatch per order', color: COST_TYPE_COLOR.variable, bg: `${COST_TYPE_COLOR.variable}0f` },
+            { label: 'Variable / Unit', value: summary.cost_per_unit > 0 ? fmt(summary.cost_per_unit) : '—', sub: summary.units_shipped > 0 ? `${summary.units_shipped} units shipped` : 'No units data', color: 'var(--text-primary)', bg: 'var(--bg-card)' },
+          ].map(({ label, value, sub, color, bg }) => (
+            <div key={label} style={{ background: bg, border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px' }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color, marginBottom: 4 }}>{value}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{sub}</div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -190,18 +210,29 @@ function InvoicesView({ dateRange }) {
       {/* Parsed review panel */}
       {parsed && (
         <div className="card" style={{ marginBottom: 24, border: '1.5px solid var(--accent)', padding: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
             <div>
               <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>Review Parsed Invoice</div>
               <div className="text-muted" style={{ fontSize: 13 }}>
                 {parsed.period_description || 'No period'} · {fmtDate(parsed.invoice_date)}
-                {parsed.invoice_ref    && ` · Ref: ${parsed.invoice_ref}`}
-                {parsed.units_shipped  && ` · ${parsed.units_shipped} units shipped`}
+                {parsed.invoice_ref   && ` · Ref: ${parsed.invoice_ref}`}
+                {parsed.units_shipped && ` · ${parsed.units_shipped} units shipped`}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-ghost" onClick={() => setParsed(null)}>Discard</button>
+              <button className="btn btn-ghost" onClick={() => { setParsed(null); setInvoiceSummary(null); }}>Discard</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save Invoice'}</button>
+            </div>
+          </div>
+
+          {/* AI summary banner */}
+          <div style={{
+            background: 'var(--accent-dim)', border: '1px solid var(--accent)', borderRadius: 8,
+            padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10,
+          }}>
+            <span style={{ fontSize: 16, marginTop: 1 }}>✦</span>
+            <div style={{ fontSize: 13, color: 'var(--accent)', lineHeight: 1.5, fontWeight: 500 }}>
+              {summaryLoading ? 'Generating summary…' : (invoiceSummary || '')}
             </div>
           </div>
 
