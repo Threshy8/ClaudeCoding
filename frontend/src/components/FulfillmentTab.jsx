@@ -67,6 +67,8 @@ function InvoicesView({ dateRange }) {
   const [expandedId, setExpandedId]     = useState(null);
   const [lineItems, setLineItems]       = useState({});
   const [loadingLines, setLoadingLines] = useState(null);
+  const [matchedOrders, setMatchedOrders] = useState({});
+  const [loadingOrders, setLoadingOrders] = useState(null);
   const [uploading, setUploading]       = useState(false);
   const [uploadError, setUploadError]   = useState(null);
   const [parsed, setParsed]             = useState(null);
@@ -113,6 +115,14 @@ function InvoicesView({ dateRange }) {
         setLineItems(prev => ({ ...prev, [id]: data }));
       } catch (e) { /* ignore */ }
       finally { setLoadingLines(null); }
+    }
+    if (!matchedOrders[id]) {
+      setLoadingOrders(id);
+      try {
+        const data = await apiFetch(`/api/fulfillment/invoices/${id}/matched-orders`);
+        setMatchedOrders(prev => ({ ...prev, [id]: data }));
+      } catch (e) { /* ignore */ }
+      finally { setLoadingOrders(null); }
     }
   };
 
@@ -346,6 +356,62 @@ function InvoicesView({ dateRange }) {
                               {loadingLines === inv.id
                                 ? <div className="text-muted" style={{ fontSize: 13, padding: 8 }}>Loading…</div>
                                 : <LineItemsTable items={lineItems[inv.id] || []} />}
+
+                              {/* Matched Orders */}
+                              <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 12 }}>
+                                  Matched Shopify Orders — {matchedOrders[inv.id]?.period
+                                    ? `${fmtDate(matchedOrders[inv.id].period.start)} to ${fmtDate(matchedOrders[inv.id].period.end)}`
+                                    : ''}
+                                </div>
+                                {loadingOrders === inv.id ? (
+                                  <div className="text-muted" style={{ fontSize: 13 }}>Loading orders…</div>
+                                ) : !matchedOrders[inv.id]?.orders?.length ? (
+                                  <div className="text-muted" style={{ fontSize: 13 }}>No orders found for this period.</div>
+                                ) : (
+                                  <table style={{ fontSize: 12, width: '100%' }}>
+                                    <thead>
+                                      <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                        {['Date', 'Order #', 'SKUs', 'Units', 'Revenue', '3PL Cost', 'Fulfilled by SCC'].map((h, i) => (
+                                          <th key={h} style={{ padding: '4px 8px 8px', textAlign: i >= 3 ? 'right' : 'left', fontWeight: 600, color: 'var(--text-muted)', fontSize: 11 }}>{h}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {matchedOrders[inv.id].orders.map(order => (
+                                        <tr key={order.shopify_order_id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                          <td style={{ padding: '6px 8px 6px 0', color: 'var(--text-muted)' }}>{fmtDate(order.order_date)}</td>
+                                          <td style={{ padding: '6px 8px' }}>
+                                            <span className="mono" style={{ fontSize: 11 }}>#{order.shopify_order_id}</span>
+                                          </td>
+                                          <td style={{ padding: '6px 8px', color: 'var(--text-muted)', maxWidth: 220 }}>
+                                            {order.line_items.map(li => `${li.sku} ×${li.quantity}`).join(', ')}
+                                          </td>
+                                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{order.total_units}</td>
+                                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(order.total_revenue)}</td>
+                                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: order.variable_3pl_cost > 0 ? COST_TYPE_COLOR.variable : 'var(--text-muted)' }}>
+                                            {order.variable_3pl_cost > 0 ? fmt(order.variable_3pl_cost) : '—'}
+                                          </td>
+                                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                                            {order.is_scc
+                                              ? <span style={{ color: '#22c55e', fontWeight: 700 }}>✓ Yes</span>
+                                              : <span style={{ color: 'var(--text-muted)' }}>No</span>}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                    <tfoot>
+                                      <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}>
+                                        <td colSpan={3} style={{ padding: '8px 8px 4px 0', fontSize: 12 }}>Total</td>
+                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right' }}>{matchedOrders[inv.id].orders.reduce((s, o) => s + o.total_units, 0)}</td>
+                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right' }}>{fmt(matchedOrders[inv.id].orders.reduce((s, o) => s + o.total_revenue, 0))}</td>
+                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right', color: COST_TYPE_COLOR.variable }}>{fmt(matchedOrders[inv.id].orders.reduce((s, o) => s + o.variable_3pl_cost, 0))}</td>
+                                        <td></td>
+                                      </tr>
+                                    </tfoot>
+                                  </table>
+                                )}
+                              </div>
                             </div>
                           </td>
                         </tr>

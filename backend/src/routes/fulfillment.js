@@ -261,18 +261,6 @@ router.post('/invoices', async (req, res) => {
   if (!invoice_date || !line_items || line_items.length === 0)
     return res.status(400).json({ error: 'invoice_date and line_items are required' });
 
-  // Duplicate check
-  if (invoice_ref) {
-    const { data: existing, error: dupError } = await supabase
-      .from('fulfillment_invoices')
-      .select('id')
-      .eq('invoice_ref', invoice_ref)
-      .limit(1);
-    if (dupError) return res.status(500).json({ error: dupError.message });
-    if (existing && existing.length > 0)
-      return res.status(409).json({ error: `Invoice ${invoice_ref} has already been uploaded` });
-  }
-
   const totalExGst  = line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
   const totalGst    = line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0);
   const totalIncGst = totalExGst + totalGst;
@@ -310,7 +298,84 @@ router.post('/invoices', async (req, res) => {
   res.json({ success: true, invoice });
 });
 
-// ── DELETE /api/fulfillment/invoices/:id ──────────────────────────────────────
+// ── GET /api/fulfillment/invoices/:id/matched-orders ─────────────────────────
+// Returns Shopify orders for the invoice's period with 3PL cost allocation
+router.get('/invoices/:id/matched-orders', async (req, res) => {
+  // Get invoice to know its date and units_shipped
+  const { data: inv, error: invErr } = await supabase
+    .from('fulfillment_invoices')
+    .select('id, invoice_date, units_shipped, total_ex_gst')
+    .eq('id', req.params.id)
+    .single();
+  if (invErr) return res.status(500).json({ error: invErr.message });
+
+  // Get variable cost total for this invoice
+  const { data: lineItems, error: liErr } = await supabase
+    .from('fulfillment_line_items')
+    .select('cost_type, amount_ex_gst')
+    .eq('invoice_id', req.params.id);
+  if (liErr) return res.status(500).json({ error: liErr.message });
+
+  const variableTotal = (lineItems || [])
+    .filter(li => li.cost_type === 'variable')
+    .reduce((s, li) => s + parseFloat(li.amount_ex_gst || 0), 0);
+
+  const variableCostPerUnit = inv.units_shipped > 0 ? variableTotal / inv.units_shipped : 0;
+
+  // Use invoice date as period end, go back 7 days as period start (weekly invoice)
+  const periodEnd   = inv.invoice_date;
+  const d = new Date(inv.invoice_date);
+  d.setDate(d.getDate() - 6);
+  const periodStart = d.toISOString().split('T')[0];
+
+  // Fetch all AU sales in that window
+  const { data: sales, error: salesErr } = await supabase
+    .from('shopify_sales')
+    .select('shopify_order_id, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
+    .gte('order_date', periodStart)
+    .lte('order_date', periodEnd)
+    .eq('store', 'au')
+    .order('order_date', { ascending: false });
+  if (salesErr) return res.status(500).json({ error: salesErr.message });
+
+  // Group by order
+  const orderMap = {};
+  for (const s of (sales || [])) {
+    if (!orderMap[s.shopify_order_id]) {
+      orderMap[s.shopify_order_id] = {
+        shopify_order_id:     s.shopify_order_id,
+        order_date:           s.order_date,
+        fulfillment_location: s.fulfillment_location || 'Unknown',
+        is_scc:               (s.fulfillment_location || '').toLowerCase().includes('southern cross') ||
+                              (s.fulfillment_location || '').toLowerCase().includes('scc') ||
+                              (s.fulfillment_location || '').toLowerCase().includes('manual'),
+        line_items:           [],
+        total_units:          0,
+        total_revenue:        0,
+      };
+    }
+    const o = orderMap[s.shopify_order_id];
+    o.line_items.push({ sku: s.sku, product_name: s.product_name, quantity: s.quantity_sold });
+    o.total_units   += s.quantity_sold;
+    o.total_revenue += s.quantity_sold * parseFloat(s.sale_price || 0);
+  }
+
+  const orders = Object.values(orderMap).map(o => ({
+    ...o,
+    total_revenue:     Math.round(o.total_revenue * 100) / 100,
+    variable_3pl_cost: o.is_scc ? Math.round(o.total_units * variableCostPerUnit * 100) / 100 : 0,
+  }));
+
+  orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
+
+  res.json({
+    period: { start: periodStart, end: periodEnd },
+    variable_cost_per_unit: Math.round(variableCostPerUnit * 100) / 100,
+    orders,
+  });
+});
+
+
 router.delete('/invoices/:id', async (req, res) => {
   const { error } = await supabase.from('fulfillment_invoices').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
