@@ -44,7 +44,7 @@ router.get('/summary', async (req, res) => {
   if (!invoices || invoices.length === 0) {
     return res.json({
       invoices: [],
-      totals: { inbound: 0, outbound: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0, cost_per_unit: 0 },
+      totals: { inbound: 0, outbound: 0, delivery: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0, cost_per_unit: 0 },
     });
   }
 
@@ -55,7 +55,7 @@ router.get('/summary', async (req, res) => {
     .in('invoice_id', invoiceIds);
   if (liError) return res.status(500).json({ error: liError.message });
 
-  const totals = { inbound: 0, outbound: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0 };
+  const totals = { inbound: 0, outbound: 0, delivery: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0 };
 
   for (const li of (lineItems || [])) {
     const amt = parseFloat(li.amount_ex_gst) || 0;
@@ -73,7 +73,7 @@ router.get('/summary', async (req, res) => {
     ? Math.round((totals.variable / totals.units_shipped) * 100) / 100
     : 0;
 
-  for (const k of ['inbound', 'outbound', 'other', 'total', 'fixed', 'variable'])
+  for (const k of ['inbound', 'outbound', 'delivery', 'other', 'total', 'fixed', 'variable'])
     totals[k] = Math.round(totals[k] * 100) / 100;
 
   res.json({ invoices, totals });
@@ -196,7 +196,7 @@ router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
 
   const base64 = req.file.buffer.toString('base64');
 
-  const prompt = `You are parsing a 3PL (third-party logistics) warehouse invoice for The Watch Box Co., an Australian e-commerce brand.
+  const prompt = `You are parsing a 3PL (third-party logistics) warehouse invoice for The Watch Box Co., an Australian e-commerce brand. Their 3PL is Southern Cross Cargo (SCC).
 
 Extract all charge line items and return ONLY valid JSON (no markdown, no commentary).
 
@@ -204,18 +204,24 @@ For each line item assign THREE classifications:
 
 1. "category":
    - "inbound"  -> receiving stock, put away, pallet storage, admin order processing receiving, inbound freight, packaging materials for receiving
-   - "outbound" -> pick/pack, dispatch, admin order processing despatch, outbound freight, delivery charges, pick pack ship per unit
-   - "other"    -> general labour, miscellaneous
+   - "outbound" -> pick/pack, admin order processing despatch, pack label dispatch, pick pack ship per unit
+   - "delivery" -> ANY delivery or freight charge for sending orders to customers. Examples: "DELIVERY CHARGE", "freight charges", "shipping charges". This is the total cost of shipping all orders that week.
+   - "other"    -> general labour, miscellaneous, pallet wrapping
 
 2. "cost_type":
-   - "variable" -> scales with number of orders/units. Examples: pick & pack per unit, pack label dispatch per unit, admin order processing despatch per order, pick pack ship per unit
-   - "fixed"    -> same regardless of order volume. Examples: pallet storage, receiving/put away, inbound freight, delivery/freight charges, general labour, pallet wrapping, packaging materials
+   - "variable" -> scales with number of orders/units. Examples: pick & pack per unit, pack label dispatch per order, admin order processing despatch per order, pick pack ship per unit, delivery/freight charges (scales with order volume)
+   - "fixed"    -> same regardless of order volume. Examples: pallet storage, receiving/put away, general labour, pallet wrapping, packaging materials
+
+   IMPORTANT: Delivery/freight charges for customer shipments are VARIABLE (they scale with orders), NOT fixed.
 
 3. "variable_type" (only set this for variable cost_type items, otherwise null):
-   - "per_order" -> flat fee charged once per order/dispatch regardless of how many units. Examples: "Admin Order Processing Despatch - 63 @ $4.50", "Pack, label and dispatch - 63 @ $1.50". The quantity matches the number of orders dispatched.
-   - "per_unit"  -> fee charged per individual unit picked/shipped. Examples: "PICK, PACK, SHIP - Per unit - 73 @ $1.00". The description says "per unit" or the quantity matches units shipped (higher than order count).
+   - "per_order" -> flat fee charged once per order/dispatch. Examples: "Admin Order Processing Despatch - 63 @ $4.50", "Pack, label and dispatch - 63 @ $1.50", "DELIVERY CHARGE - Feb 2026 freight charges - 1 @ $1145.10" (total freight for all orders = per_order when divided by order count).
+   - "per_unit"  -> fee charged per individual unit. Examples: "PICK, PACK, SHIP - Per unit - 73 @ $1.00".
 
-To distinguish per_order vs per_unit: if the quantity on the line matches the number of dispatch/order processing lines (typically lower number like 63), it's per_order. If it matches the units shipped count (typically higher, like 73), it's per_unit. "Per unit" in the description is a strong signal.
+To distinguish per_order vs per_unit: if the quantity matches order count (lower number like 63) it's per_order. If it matches units shipped (higher like 73) or says "per unit" it's per_unit.
+For delivery charges: even if listed as "1 @ $X" (lump sum), classify as variable/per_order — the total will be divided across all orders.
+
+Also extract "orders_dispatched": look for the quantity on Admin Order Processing Despatch or Pack label dispatch lines — that number is how many orders SCC dispatched this period.
 
 Return this exact JSON structure:
 {
@@ -223,10 +229,11 @@ Return this exact JSON structure:
   "invoice_date": "YYYY-MM-DD or null",
   "period_description": "string e.g. Warehouse charges WE 20260301",
   "units_shipped": number or null,
+  "orders_dispatched": number or null,
   "line_items": [
     {
       "description": "exact description from invoice",
-      "category": "inbound|outbound|other",
+      "category": "inbound|outbound|delivery|other",
       "cost_type": "variable|fixed",
       "variable_type": "per_order|per_unit|null",
       "quantity": number or null,
@@ -237,9 +244,9 @@ Return this exact JSON structure:
   ]
 }
 
-For units_shipped: use the quantity from PICK PACK SHIP Per unit line, or Pack label and dispatch line — whichever has the higher quantity (that's the unit count not order count).
-For amounts: use the ex-GST amount.
-Extract ALL line items.`;
+For units_shipped: use quantity from PICK PACK SHIP Per unit line (highest quantity = units).
+For orders_dispatched: use quantity from Admin Order Processing Despatch or Pack label dispatch lines.
+For amounts: use ex-GST amount. Extract ALL line items.`;
 
   try {
     const message = await anthropic.messages.create({
@@ -265,7 +272,7 @@ Extract ALL line items.`;
 
 // ── POST /api/fulfillment/invoices ────────────────────────────────────────────
 router.post('/invoices', async (req, res) => {
-  const { invoice_ref, invoice_date, period_description, units_shipped, line_items } = req.body;
+  const { invoice_ref, invoice_date, period_description, units_shipped, orders_dispatched, line_items } = req.body;
 
   if (!invoice_date || !line_items || line_items.length === 0)
     return res.status(400).json({ error: 'invoice_date and line_items are required' });
@@ -281,6 +288,7 @@ router.post('/invoices', async (req, res) => {
       invoice_date,
       period_description: period_description || null,
       units_shipped:      units_shipped || null,
+      orders_dispatched:  orders_dispatched || null,
       total_ex_gst:       Math.round(totalExGst  * 100) / 100,
       total_gst:          Math.round(totalGst    * 100) / 100,
       total_inc_gst:      Math.round(totalIncGst * 100) / 100,
@@ -314,7 +322,7 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
   // Get invoice to know its date and units_shipped
   const { data: inv, error: invErr } = await supabase
     .from('fulfillment_invoices')
-    .select('id, invoice_date, units_shipped, total_ex_gst')
+    .select('id, invoice_date, units_shipped, orders_dispatched, total_ex_gst')
     .eq('id', req.params.id)
     .single();
   if (invErr) return res.status(500).json({ error: invErr.message });
@@ -362,10 +370,11 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
   d.setDate(d.getDate() - 6);
   const periodStart = d.toISOString().split('T')[0];
 
-  // Fetch all AU sales in that window
+  // Fetch ALL AU SCC-fulfilled sales in that window (no location filter here — we filter after)
   const { data: sales, error: salesErr } = await supabase
     .from('shopify_sales')
     .select('shopify_order_id, order_number, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
+    .gte('order_date', periodStart)
     .lte('order_date', periodEnd)
     .eq('store', 'au')
     .order('order_date', { ascending: false });
@@ -419,11 +428,21 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
 
   orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
 
+  const sccOrders = orders.filter(o => o.is_scc);
+  const shopifyCount = sccOrders.length;
+  const invoiceCount = inv.orders_dispatched || orderCount || null;
+  const reconciled   = invoiceCount ? shopifyCount === invoiceCount : null;
+
   res.json({
     period: { start: periodStart, end: periodEnd },
     cost_method: useFallback ? 'average' : 'accurate',
     rate_per_order: Math.round(ratePerOrder * 100) / 100,
     rate_per_unit:  Math.round(ratePerUnit  * 100) / 100,
+    reconciliation: {
+      shopify_scc_orders: shopifyCount,
+      invoice_dispatched: invoiceCount,
+      matched: reconciled,  // true = exact match, false = mismatch, null = unknown
+    },
     orders,
   });
 });

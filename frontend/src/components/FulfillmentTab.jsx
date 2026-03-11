@@ -11,8 +11,8 @@ function fmtDate(d) {
   return `${day}/${m}/${y}`;
 }
 
-const CATEGORY_COLOR  = { inbound: '#3b82f6', outbound: '#f59e0b', other: '#8b5cf6' };
-const CATEGORY_LABEL  = { inbound: 'Inbound',  outbound: 'Outbound',  other: 'Other'  };
+const CATEGORY_COLOR  = { inbound: '#3b82f6', outbound: '#f59e0b', delivery: '#06b6d4', other: '#8b5cf6' };
+const CATEGORY_LABEL  = { inbound: 'Inbound',  outbound: 'Outbound', delivery: 'Delivery', other: 'Other'  };
 const COST_TYPE_COLOR = { variable: '#10b981', fixed: '#6b7280' };
 const COST_TYPE_LABEL = { variable: 'Variable', fixed: 'Fixed' };
 
@@ -255,7 +255,7 @@ function InvoicesView({ dateRange }) {
                     <td style={{ fontSize: 13 }}>{li.description}</td>
                     <td>
                       <EditableSelect value={li.category} onChange={v => updateParsedLine(idx, 'category', v)}
-                        options={[['inbound','Inbound'],['outbound','Outbound'],['other','Other']]}
+                        options={[['inbound','Inbound'],['outbound','Outbound'],['delivery','Delivery'],['other','Other']]}
                         color={CATEGORY_COLOR[li.category]} />
                     </td>
                     <td>
@@ -382,6 +382,25 @@ function InvoicesView({ dateRange }) {
                                     ? `${fmtDate(matchedOrders[inv.id].period.start)} to ${fmtDate(matchedOrders[inv.id].period.end)}`
                                     : ''}
                                 </div>
+                                {/* Reconciliation banner */}
+                                {matchedOrders[inv.id]?.reconciliation && (() => {
+                                  const r = matchedOrders[inv.id].reconciliation;
+                                  if (r.matched === true) return (
+                                    <div style={{ fontSize: 12, background: '#22c55e18', border: '1px solid #22c55e40', borderRadius: 6, padding: '6px 10px', marginBottom: 10, color: '#16a34a', display: 'flex', gap: 8, alignItems: 'center' }}>
+                                      ✓ <strong>Reconciled</strong> — Invoice shows {r.invoice_dispatched} dispatches, Shopify shows {r.shopify_scc_orders} SCC orders. Exact match.
+                                    </div>
+                                  );
+                                  if (r.matched === false) return (
+                                    <div style={{ fontSize: 12, background: '#ef444418', border: '1px solid #ef444440', borderRadius: 6, padding: '6px 10px', marginBottom: 10, color: '#dc2626', display: 'flex', gap: 8, alignItems: 'center' }}>
+                                      ⚠ <strong>Mismatch</strong> — Invoice shows {r.invoice_dispatched} dispatches, Shopify shows {r.shopify_scc_orders} SCC orders ({r.shopify_scc_orders - r.invoice_dispatched > 0 ? '+' : ''}{r.shopify_scc_orders - r.invoice_dispatched}). Costs may be approximate.
+                                    </div>
+                                  );
+                                  return (
+                                    <div style={{ fontSize: 12, background: '#f59e0b18', border: '1px solid #f59e0b40', borderRadius: 6, padding: '6px 10px', marginBottom: 10, color: '#d97706' }}>
+                                      ℹ Shopify shows {r.shopify_scc_orders} SCC orders — invoice dispatch count unknown.
+                                    </div>
+                                  );
+                                })()}
                                 {matchedOrders[inv.id]?.cost_method === 'accurate' && (
                                   <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>
