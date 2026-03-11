@@ -261,6 +261,18 @@ router.post('/invoices', async (req, res) => {
   if (!invoice_date || !line_items || line_items.length === 0)
     return res.status(400).json({ error: 'invoice_date and line_items are required' });
 
+  // Duplicate check
+  if (invoice_ref) {
+    const { data: existing, error: dupError } = await supabase
+      .from('fulfillment_invoices')
+      .select('id')
+      .eq('invoice_ref', invoice_ref)
+      .limit(1);
+    if (dupError) return res.status(500).json({ error: dupError.message });
+    if (existing && existing.length > 0)
+      return res.status(409).json({ error: `Invoice ${invoice_ref} has already been uploaded` });
+  }
+
   const totalExGst  = line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
   const totalGst    = line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0);
   const totalIncGst = totalExGst + totalGst;
