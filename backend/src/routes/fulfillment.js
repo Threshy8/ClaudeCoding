@@ -8,38 +8,33 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── GET /api/fulfillment/invoices ─────────────────────────────────────────────
-// List all invoices with totals
 router.get('/invoices', async (req, res) => {
   const { data, error } = await supabase
     .from('fulfillment_invoices')
     .select('*')
     .order('invoice_date', { ascending: false });
-
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
-// ── GET /api/fulfillment/invoices/:id/line-items ───────────────────────────────
+// ── GET /api/fulfillment/invoices/:id/line-items ──────────────────────────────
 router.get('/invoices/:id/line-items', async (req, res) => {
   const { data, error } = await supabase
     .from('fulfillment_line_items')
     .select('*')
     .eq('invoice_id', req.params.id)
     .order('category');
-
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
-// ── GET /api/fulfillment/summary ───────────────────────────────────────────────
-// Monthly cost summary for dashboard
+// ── GET /api/fulfillment/summary ──────────────────────────────────────────────
 router.get('/summary', async (req, res) => {
   const { start_date, end_date } = req.query;
 
   let query = supabase
     .from('fulfillment_invoices')
-    .select('id, invoice_date, shipment_ref, total_ex_gst, total_inc_gst, units_shipped');
-
+    .select('id, invoice_date, invoice_ref, period_description, total_ex_gst, total_inc_gst, units_shipped');
   if (start_date) query = query.gte('invoice_date', start_date);
   if (end_date)   query = query.lte('invoice_date', end_date);
 
@@ -47,45 +42,137 @@ router.get('/summary', async (req, res) => {
   if (invError) return res.status(500).json({ error: invError.message });
 
   if (!invoices || invoices.length === 0) {
-    return res.json({ invoices: [], totals: { inbound: 0, outbound: 0, other: 0, total: 0, units_shipped: 0, cost_per_unit: 0 } });
+    return res.json({
+      invoices: [],
+      totals: { inbound: 0, outbound: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0, cost_per_unit: 0 },
+    });
   }
 
   const invoiceIds = invoices.map(i => i.id);
   const { data: lineItems, error: liError } = await supabase
     .from('fulfillment_line_items')
-    .select('invoice_id, category, amount_ex_gst')
+    .select('invoice_id, category, cost_type, amount_ex_gst')
     .in('invoice_id', invoiceIds);
-
   if (liError) return res.status(500).json({ error: liError.message });
 
-  const totals = { inbound: 0, outbound: 0, other: 0, total: 0, units_shipped: 0 };
+  const totals = { inbound: 0, outbound: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0 };
 
   for (const li of (lineItems || [])) {
     const amt = parseFloat(li.amount_ex_gst) || 0;
     totals.total += amt;
-    if (li.category === 'inbound')       totals.inbound += amt;
+    if (li.category === 'inbound')       totals.inbound  += amt;
     else if (li.category === 'outbound') totals.outbound += amt;
-    else                                  totals.other += amt;
+    else                                  totals.other    += amt;
+    if (li.cost_type === 'fixed')        totals.fixed    += amt;
+    else                                  totals.variable += amt;
   }
 
-  for (const inv of invoices) {
-    totals.units_shipped += parseInt(inv.units_shipped) || 0;
-  }
+  for (const inv of invoices) totals.units_shipped += parseInt(inv.units_shipped) || 0;
 
   totals.cost_per_unit = totals.units_shipped > 0
-    ? Math.round((totals.outbound / totals.units_shipped) * 100) / 100
+    ? Math.round((totals.variable / totals.units_shipped) * 100) / 100
     : 0;
 
-  // Round
-  for (const k of ['inbound', 'outbound', 'other', 'total']) {
+  for (const k of ['inbound', 'outbound', 'other', 'total', 'fixed', 'variable'])
     totals[k] = Math.round(totals[k] * 100) / 100;
-  }
 
   res.json({ invoices, totals });
 });
 
+// ── GET /api/fulfillment/order-cost-sheet ─────────────────────────────────────
+router.get('/order-cost-sheet', async (req, res) => {
+  const { start_date, end_date } = req.query;
+  if (!start_date || !end_date)
+    return res.status(400).json({ error: 'start_date and end_date required' });
+
+  let variableCostTotal = 0;
+  let fixedCostTotal    = 0;
+  let fixedLineItems    = [];
+  let totalUnitsShipped = 0;
+
+  let invQuery = supabase
+    .from('fulfillment_invoices')
+    .select('id, units_shipped')
+    .gte('invoice_date', start_date)
+    .lte('invoice_date', end_date);
+
+  const { data: invoices, error: invErr } = await invQuery;
+  if (invErr) return res.status(500).json({ error: invErr.message });
+
+  if (invoices && invoices.length > 0) {
+    const ids = invoices.map(i => i.id);
+    const { data: lineItems, error: liErr } = await supabase
+      .from('fulfillment_line_items')
+      .select('description, category, cost_type, amount_ex_gst')
+      .in('invoice_id', ids);
+    if (liErr) return res.status(500).json({ error: liErr.message });
+
+    for (const li of (lineItems || [])) {
+      const amt = parseFloat(li.amount_ex_gst) || 0;
+      if (li.cost_type === 'fixed') {
+        fixedCostTotal += amt;
+        fixedLineItems.push({ description: li.description, category: li.category, amount: amt });
+      } else {
+        variableCostTotal += amt;
+      }
+    }
+    for (const inv of invoices) totalUnitsShipped += parseInt(inv.units_shipped) || 0;
+  }
+
+  const variableCostPerUnit = totalUnitsShipped > 0 ? variableCostTotal / totalUnitsShipped : 0;
+
+  const { data: sales, error: salesErr } = await supabase
+    .from('shopify_sales')
+    .select('shopify_order_id, sku, product_name, quantity_sold, sale_price, order_date')
+    .gte('order_date', start_date)
+    .lte('order_date', end_date)
+    .eq('store', 'au')
+    .order('order_date', { ascending: false });
+
+  if (salesErr) return res.status(500).json({ error: salesErr.message });
+
+  const orderMap = {};
+  for (const s of (sales || [])) {
+    if (!orderMap[s.shopify_order_id]) {
+      orderMap[s.shopify_order_id] = {
+        shopify_order_id: s.shopify_order_id,
+        order_date: s.order_date,
+        line_items: [],
+        total_units: 0,
+        total_revenue: 0,
+      };
+    }
+    const o = orderMap[s.shopify_order_id];
+    o.line_items.push({ sku: s.sku, product_name: s.product_name, quantity: s.quantity_sold });
+    o.total_units   += s.quantity_sold;
+    o.total_revenue += s.quantity_sold * parseFloat(s.sale_price || 0);
+  }
+
+  const orders = Object.values(orderMap).map(o => ({
+    ...o,
+    total_revenue:     Math.round(o.total_revenue * 100) / 100,
+    variable_3pl_cost: Math.round(o.total_units * variableCostPerUnit * 100) / 100,
+  }));
+
+  orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
+
+  res.json({
+    period: { start_date, end_date },
+    fixed_costs: {
+      total:      Math.round(fixedCostTotal * 100) / 100,
+      line_items: fixedLineItems,
+    },
+    variable_costs: {
+      total:         Math.round(variableCostTotal * 100) / 100,
+      units_shipped: totalUnitsShipped,
+      cost_per_unit: Math.round(variableCostPerUnit * 100) / 100,
+    },
+    orders,
+    grand_total_3pl: Math.round((fixedCostTotal + variableCostTotal) * 100) / 100,
+  });
+});
+
 // ── POST /api/fulfillment/parse-pdf ───────────────────────────────────────────
-// Upload PDF → Claude parses it → return structured line items (not saved yet)
 router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No PDF uploaded' });
 
@@ -93,23 +180,30 @@ router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
 
   const prompt = `You are parsing a 3PL (third-party logistics) warehouse invoice for The Watch Box Co., an Australian e-commerce brand.
 
-Extract all charge line items from this invoice and return ONLY valid JSON (no markdown, no commentary).
+Extract all charge line items and return ONLY valid JSON (no markdown, no commentary).
 
-Categorise each line item as:
-- "inbound"  → receiving stock, put away, pallet storage, admin order processing receiving, inbound freight, wrapping/packaging materials for receiving
-- "outbound" → pick/pack, dispatch, admin order processing despatch, outbound freight, delivery charges, pick pack ship per unit
-- "other"    → anything that doesn't clearly fit inbound or outbound (e.g. general labour, miscellaneous)
+For each line item assign TWO classifications:
+
+1. "category":
+   - "inbound"  -> receiving stock, put away, pallet storage, admin order processing receiving, inbound freight, packaging materials for receiving
+   - "outbound" -> pick/pack, dispatch, admin order processing despatch, outbound freight, delivery charges, pick pack ship per unit
+   - "other"    -> general labour, miscellaneous
+
+2. "cost_type":
+   - "variable" -> scales with number of orders/units. Examples: pick & pack per unit, pack label dispatch per unit, admin order processing despatch per order, pick pack ship per unit
+   - "fixed"    -> same regardless of order volume. Examples: pallet storage, receiving/put away, inbound freight, delivery/freight charges, general labour, pallet wrapping, packaging materials
 
 Return this exact JSON structure:
 {
   "invoice_ref": "string or null",
   "invoice_date": "YYYY-MM-DD or null",
-  "period_description": "string describing what period this covers, e.g. 'Warehouse charges WE 20260301'",
+  "period_description": "string e.g. Warehouse charges WE 20260301",
   "units_shipped": number or null,
   "line_items": [
     {
       "description": "exact description from invoice",
-      "category": "inbound" | "outbound" | "other",
+      "category": "inbound|outbound|other",
+      "cost_type": "variable|fixed",
       "quantity": number or null,
       "unit_rate": number or null,
       "amount_ex_gst": number,
@@ -118,63 +212,52 @@ Return this exact JSON structure:
   ]
 }
 
-For units_shipped: look for "Pack, label and dispatch" or "PICK, PACK, SHIP" lines — the quantity on those lines is the units shipped.
-For amounts: use the ex-GST amount (before GST column).
-Extract ALL line items including admin fees, storage, freight, labour, packaging.`;
+For units_shipped: look for Pack label and dispatch or PICK PACK SHIP lines - the quantity is units shipped.
+For amounts: use the ex-GST amount.
+Extract ALL line items.`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
+      model: 'claude-opus-4-6',
       max_tokens: 2000,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'document',
-              source: { type: 'base64', media_type: 'application/pdf', data: base64 },
-            },
-            { type: 'text', text: prompt },
-          ],
-        },
-      ],
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+          { type: 'text', text: prompt },
+        ],
+      }],
     });
 
-    const raw = message.content[0].text.trim();
-    // Strip markdown fences if present
+    const raw   = message.content[0].text.trim();
     const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-    const parsed = JSON.parse(clean);
-
-    res.json(parsed);
+    res.json(JSON.parse(clean));
   } catch (err) {
     console.error('PDF parse error:', err.message);
     res.status(500).json({ error: 'Failed to parse PDF: ' + err.message });
   }
 });
 
-// ── POST /api/fulfillment/invoices ─────────────────────────────────────────────
-// Save a parsed invoice + its line items to Supabase
+// ── POST /api/fulfillment/invoices ────────────────────────────────────────────
 router.post('/invoices', async (req, res) => {
   const { invoice_ref, invoice_date, period_description, units_shipped, line_items } = req.body;
 
-  if (!invoice_date || !line_items || line_items.length === 0) {
+  if (!invoice_date || !line_items || line_items.length === 0)
     return res.status(400).json({ error: 'invoice_date and line_items are required' });
-  }
 
-  const totalExGst = line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
-  const totalGst   = line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0);
+  const totalExGst  = line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
+  const totalGst    = line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0);
   const totalIncGst = totalExGst + totalGst;
 
-  // Insert invoice
   const { data: invoice, error: invError } = await supabase
     .from('fulfillment_invoices')
     .insert({
       invoice_ref:        invoice_ref || null,
-      invoice_date:       invoice_date,
+      invoice_date,
       period_description: period_description || null,
       units_shipped:      units_shipped || null,
-      total_ex_gst:       Math.round(totalExGst * 100) / 100,
-      total_gst:          Math.round(totalGst * 100) / 100,
+      total_ex_gst:       Math.round(totalExGst  * 100) / 100,
+      total_gst:          Math.round(totalGst    * 100) / 100,
       total_inc_gst:      Math.round(totalIncGst * 100) / 100,
     })
     .select()
@@ -182,12 +265,12 @@ router.post('/invoices', async (req, res) => {
 
   if (invError) return res.status(500).json({ error: invError.message });
 
-  // Insert line items
   const rows = line_items.map(li => ({
     invoice_id:    invoice.id,
     description:   li.description,
     category:      li.category,
-    quantity:      li.quantity || null,
+    cost_type:     li.cost_type || 'fixed',
+    quantity:      li.quantity  || null,
     unit_rate:     li.unit_rate || null,
     amount_ex_gst: parseFloat(li.amount_ex_gst) || 0,
     gst:           parseFloat(li.gst) || 0,
@@ -201,12 +284,7 @@ router.post('/invoices', async (req, res) => {
 
 // ── DELETE /api/fulfillment/invoices/:id ──────────────────────────────────────
 router.delete('/invoices/:id', async (req, res) => {
-  // Line items deleted via CASCADE
-  const { error } = await supabase
-    .from('fulfillment_invoices')
-    .delete()
-    .eq('id', req.params.id);
-
+  const { error } = await supabase.from('fulfillment_invoices').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true });
 });

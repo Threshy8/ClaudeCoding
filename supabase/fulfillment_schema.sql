@@ -22,6 +22,7 @@ create table if not exists fulfillment_line_items (
   invoice_id    uuid not null references fulfillment_invoices(id) on delete cascade,
   description   text not null,
   category      text not null check (category in ('inbound', 'outbound', 'other')),
+  cost_type     text not null default 'fixed' check (cost_type in ('variable', 'fixed')),
   quantity      numeric(10,2),
   unit_rate     numeric(10,4),
   amount_ex_gst numeric(10,2) not null default 0,
@@ -31,10 +32,11 @@ create table if not exists fulfillment_line_items (
 
 create index if not exists fulfillment_line_items_invoice_idx  on fulfillment_line_items(invoice_id);
 create index if not exists fulfillment_line_items_category_idx on fulfillment_line_items(category);
+create index if not exists fulfillment_line_items_cost_type_idx on fulfillment_line_items(cost_type);
 
 -- RLS
-alter table fulfillment_invoices  enable row level security;
+alter table fulfillment_invoices   enable row level security;
 alter table fulfillment_line_items enable row level security;
 
-create policy "Allow all for anon" on fulfillment_invoices  for all using (true) with check (true);
+create policy "Allow all for anon" on fulfillment_invoices   for all using (true) with check (true);
 create policy "Allow all for anon" on fulfillment_line_items for all using (true) with check (true);
