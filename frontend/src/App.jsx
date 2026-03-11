@@ -9,6 +9,7 @@ import { syncShopify } from './api';
 import './App.css';
 
 const TABS = ['Dashboard', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Journal Export'];
+const APP_PASSWORD = process.env.REACT_APP_PASSWORD || 'watchbox2024';
 
 function defaultRange() {
   const now = new Date();
@@ -19,12 +20,72 @@ function defaultRange() {
   return { start, end, label: 'This Month' };
 }
 
+function PasswordGate({ onUnlock }) {
+  const [input, setInput] = useState('');
+  const [error, setError] = useState(false);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (input === APP_PASSWORD) {
+      sessionStorage.setItem('wbc_auth', '1');
+      onUnlock();
+    } else {
+      setError(true);
+      setInput('');
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'var(--bg, #faf9f7)',
+    }}>
+      <div style={{
+        background: 'var(--bg-card, #fff)', border: '1px solid var(--border, #e5e2dc)',
+        borderRadius: 12, padding: '40px 48px', width: 340, boxShadow: '0 4px 24px rgba(0,0,0,0.07)',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20,
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 28, marginBottom: 4 }}>📦</div>
+          <div style={{ fontWeight: 700, fontSize: 18, letterSpacing: '-0.02em' }}>The Watch Box Co.</div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted, #888)', marginTop: 4 }}>Operations Dashboard</div>
+        </div>
+        <form onSubmit={handleSubmit} style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input
+            type="password"
+            placeholder="Password"
+            value={input}
+            onChange={e => { setInput(e.target.value); setError(false); }}
+            autoFocus
+            style={{
+              width: '100%', padding: '10px 14px', borderRadius: 8, fontSize: 14,
+              border: `1px solid ${error ? '#ef4444' : 'var(--border, #e5e2dc)'}`,
+              outline: 'none', boxSizing: 'border-box',
+              background: 'var(--bg, #faf9f7)',
+            }}
+          />
+          {error && <div style={{ fontSize: 12, color: '#ef4444', textAlign: 'center' }}>Incorrect password</div>}
+          <button type="submit" style={{
+            width: '100%', padding: '10px', borderRadius: 8, fontSize: 14, fontWeight: 600,
+            background: '#1a1a1a', color: '#fff', border: 'none', cursor: 'pointer',
+          }}>
+            Enter
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [authed, setAuthed] = useState(() => sessionStorage.getItem('wbc_auth') === '1');
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [dateRange, setDateRange] = useState(defaultRange());
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const [syncError, setSyncError] = useState(null);
+
+  if (!authed) return <PasswordGate onUnlock={() => setAuthed(true)} />;
 
   const handleSync = useCallback(async () => {
     setSyncing(true);

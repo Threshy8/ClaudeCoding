@@ -14,7 +14,12 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    const allowed = (process.env.FRONTEND_URL || 'http://localhost:3000').split(',').map(u => u.trim());
+    // Allow requests with no origin (e.g. curl, mobile) or matching allowed list
+    if (!origin || allowed.some(u => origin.startsWith(u))) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
   methods: ['GET', 'POST', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
