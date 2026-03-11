@@ -123,8 +123,7 @@ router.get('/order-cost-sheet', async (req, res) => {
   // 2. Fetch all sales in period (including fulfillment_location)
   const { data: allSales, error: salesErr } = await supabase
     .from('shopify_sales')
-    .select('shopify_order_id, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
-    .gte('order_date', start_date)
+    .select('shopify_order_id, order_number, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
     .lte('order_date', end_date)
     .eq('store', 'au')
     .order('order_date', { ascending: false });
@@ -149,6 +148,7 @@ router.get('/order-cost-sheet', async (req, res) => {
     if (!orderMap[s.shopify_order_id]) {
       orderMap[s.shopify_order_id] = {
         shopify_order_id:     s.shopify_order_id,
+        order_number:         s.order_number || s.shopify_order_id,
         order_date:           s.order_date,
         fulfillment_location: s.fulfillment_location || 'Unknown',
         line_items:           [],
@@ -365,8 +365,7 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
   // Fetch all AU sales in that window
   const { data: sales, error: salesErr } = await supabase
     .from('shopify_sales')
-    .select('shopify_order_id, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
-    .gte('order_date', periodStart)
+    .select('shopify_order_id, order_number, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
     .lte('order_date', periodEnd)
     .eq('store', 'au')
     .order('order_date', { ascending: false });
@@ -385,11 +384,12 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
     if (!orderMap[s.shopify_order_id]) {
       orderMap[s.shopify_order_id] = {
         shopify_order_id:     s.shopify_order_id,
+        order_number:         s.order_number || s.shopify_order_id,
         order_date:           s.order_date,
         fulfillment_location: s.fulfillment_location || 'Unknown',
         is_scc:               isSCC(s.fulfillment_location),
         line_items:           [],
-        total_units:          0,  // physical units only (no x-redo)
+        total_units:          0,
         total_revenue:        0,
       };
     }

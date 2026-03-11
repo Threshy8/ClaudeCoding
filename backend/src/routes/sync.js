@@ -234,6 +234,7 @@ router.post('/shopify', async (req, res) => {
       for (const [sku, d] of Object.entries(bySku)) {
         salesRecords.push({
           shopify_order_id: String(order.id),
+          order_number:     order.order_number ? String(order.order_number) : null,
           sku,
           product_name: d.product_name,
           quantity_sold: d.qty,

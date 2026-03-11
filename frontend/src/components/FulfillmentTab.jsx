@@ -404,7 +404,7 @@ function InvoicesView({ dateRange }) {
                                         <tr key={order.shopify_order_id} style={{ borderBottom: '1px solid var(--border)' }}>
                                           <td style={{ padding: '6px 8px 6px 0', color: 'var(--text-muted)' }}>{fmtDate(order.order_date)}</td>
                                           <td style={{ padding: '6px 8px' }}>
-                                            <span className="mono" style={{ fontSize: 11 }}>#{order.shopify_order_id}</span>
+                                            <span className="mono" style={{ fontSize: 11 }}>#{order.order_number || order.shopify_order_id}</span>
                                           </td>
                                           <td style={{ padding: '6px 8px', color: 'var(--text-muted)', maxWidth: 220 }}>
                                             {order.line_items.map(li => `${li.sku} ×${li.quantity}`).join(', ')}
@@ -627,7 +627,7 @@ function CostSheetView({ dateRange }) {
                   <React.Fragment key={order.shopify_order_id}>
                     <tr>
                       <td className="text-muted">{fmtDate(order.order_date)}</td>
-                      <td><span className="mono" style={{ fontSize: 12 }}>#{order.shopify_order_id}</span></td>
+                      <td><span className="mono" style={{ fontSize: 12 }}>#{order.order_number || order.shopify_order_id}</span></td>
                       <td>
                         <span style={{
                           fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
