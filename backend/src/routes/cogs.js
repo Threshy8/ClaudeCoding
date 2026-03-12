@@ -22,7 +22,8 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   // 2. Get gross sales (all time) — used with all-time refunds for inventory on-hand
   const { data: allSales, error: allSalesError } = await supabase
     .from('shopify_sales')
-    .select('sku, quantity_sold');
+    .select('sku, quantity_sold')
+    .neq('sku', 'x-redo');
 
   if (allSalesError) throw new Error(allSalesError.message);
 
@@ -38,7 +39,8 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .from('shopify_sales')
     .select('sku, product_name, quantity_sold, sale_price, order_date')
     .gte('order_date', periodStart)
-    .lt('order_date', periodEnd);
+    .lt('order_date', periodEnd)
+    .neq('sku', 'x-redo');
 
   if (periodSalesError) throw new Error(periodSalesError.message);
 
@@ -303,13 +305,13 @@ router.get('/orders', async (req, res) => {
     .gte('order_date', start_date)
     .lte('order_date', end_date)
     .eq('store', store)
+    .neq('sku', 'x-redo')
     .order('order_date', { ascending: false });
   if (sErr) return res.status(500).json({ error: sErr.message });
 
   // Group by order
   const orderMap = {};
   for (const s of (sales || [])) {
-    if ((s.sku || '').toLowerCase().includes('x-redo')) continue;
     if (!orderMap[s.shopify_order_id]) {
       orderMap[s.shopify_order_id] = {
         shopify_order_id:     s.shopify_order_id,
@@ -477,7 +479,7 @@ router.get('/entries/by-sku', async (req, res) => {
 
     // Get inventory on-hand from WAC data (purchases − all-time net sold)
     const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
-    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold');
+    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo');
     const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded');
 
     const purchaseMap = {};
@@ -679,7 +681,8 @@ router.get('/inventory/summary', async (req, res) => {
       .from('shopify_sales')
       .select('sku, quantity_sold')
       .gte('order_date', monthStart)
-      .eq('store', store);
+      .eq('store', store)
+      .neq('sku', 'x-redo');
 
     const monthSoldMap = {};
     for (const s of (monthSales || [])) {
@@ -692,7 +695,8 @@ router.get('/inventory/summary', async (req, res) => {
       .from('shopify_sales')
       .select('sku, quantity_sold, sale_price')
       .gte('order_date', thirtyDaysAgo)
-      .eq('store', store);
+      .eq('store', store)
+      .neq('sku', 'x-redo');
 
     const salePriceMap = {}; // { sku: { totalRev, totalQty } }
     for (const s of (recentSales || [])) {
@@ -751,7 +755,8 @@ router.get('/forecast/revenue', async (req, res) => {
       .select('order_date, quantity_sold, sale_price')
       .gte('order_date', ninetyAgo)
       .lte('order_date', today)
-      .eq('store', store);
+      .eq('store', store)
+      .neq('sku', 'x-redo');
     if (sErr) return res.status(500).json({ error: sErr.message });
 
     // Build daily revenue map
@@ -851,7 +856,8 @@ router.get('/forecast/stockout', async (req, res) => {
       .select('sku, quantity_sold')
       .gte('order_date', thirtyAgo)
       .lte('order_date', today)
-      .eq('store', store);
+      .eq('store', store)
+      .neq('sku', 'x-redo');
     if (rsErr) return res.status(500).json({ error: rsErr.message });
 
     const soldMap = {};
@@ -921,7 +927,8 @@ router.get('/forecast/peak-period', async (req, res) => {
       .select('sku, product_name, quantity_sold, sale_price, order_date')
       .gte('order_date', period_start)
       .lte('order_date', period_end)
-      .eq('store', store);
+      .eq('store', store)
+      .neq('sku', 'x-redo');
     if (sErr) return res.status(500).json({ error: sErr.message });
 
     // Daily breakdown

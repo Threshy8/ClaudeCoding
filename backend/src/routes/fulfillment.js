@@ -126,6 +126,7 @@ router.get('/order-cost-sheet', async (req, res) => {
     .select('shopify_order_id, order_number, sku, product_name, quantity_sold, sale_price, order_date, fulfillment_location')
     .lte('order_date', end_date)
     .eq('store', 'au')
+    .neq('sku', 'x-redo')
     .order('order_date', { ascending: false });
   if (salesErr) return res.status(500).json({ error: salesErr.message });
 
@@ -377,6 +378,7 @@ router.get('/invoices/:id/matched-orders', async (req, res) => {
     .gte('order_date', periodStart)
     .lte('order_date', periodEnd)
     .eq('store', 'au')
+    .neq('sku', 'x-redo')
     .order('order_date', { ascending: false });
   if (salesErr) return res.status(500).json({ error: salesErr.message });
 
