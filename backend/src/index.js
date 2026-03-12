@@ -1,3 +1,11 @@
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err.message);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION:', reason);
+});
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -28,6 +36,9 @@ app.use('/api/cogs', cogsRouter);
 app.use('/api', cogsRouter); // also mounts /api/inventory/summary from cogsRouter
 app.use('/api/journal', journalRouter);
 app.use('/api/fulfillment', fulfillmentRouter);
+
+// Root health check (Railway checks GET /)
+app.get('/', (req, res) => res.json({ status: 'ok' }));
 
 // Health check
 app.get('/health', (req, res) => {
