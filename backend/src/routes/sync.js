@@ -190,8 +190,6 @@ router.post('/shopify', async (req, res) => {
         const qty = item.quantity || 0;
         if (qty <= 0) continue;
         const sku = item.sku || `NO-SKU-${item.product_id}`;
-        // Skip x-redo (Redo app fees) — not a real product
-        if (sku.toLowerCase().includes('x-redo')) continue;
         const lineGross = parseFloat(item.price) * qty;
         grossLineTotal += lineGross;
         lines.push({
