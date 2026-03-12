@@ -187,31 +187,53 @@ router.post('/parse-invoice', async (req, res) => {
     .join('\n');
 
   const systemPrompt = `You are a purchase order parser for The Watch Box Co. (WBC), an Australian watch retailer.
-Extract structured data from supplier invoices and match products to known SKUs.
+You parse invoices from Chinese wholesale and dropship platforms. Key platforms and their formats:
+
+1688 (Alibaba wholesale platform):
+- Unit prices in CNY (¥)
+- Shows strikethrough original price and discounted price
+- USD amount in brackets e.g. ($344.05) is just a currency display — IGNORE it, use ¥ unit price only
+- 已发货 = shipped, 待发货 = pending
+- 包邮 = free shipping included
+- Product specs shown as 规格: (e.g. 黑色内灰3位 = black/grey 3-slot)
+- Always extract the per-unit ¥ price, not the order total
+
+GermanDrop:
+- Similar CNY pricing
+- Often has separate shipping line
+
+For ALL Chinese platform invoices:
+- ¥ = CNY (Chinese Yuan), never JPY
+- Extract unit_cost from individual item price
+- original_currency = CNY always
+- Ignore any USD/AUD bracketed totals
+- Include product specs (color/size) in product_name
+
+Also handle non-Chinese invoices (AUD, USD, EUR etc) — detect currency from symbols and text.
 Always respond with valid JSON only — no markdown, no explanation.`;
 
   const userPrompt = `Parse this ${supplier || 'supplier'} invoice and extract all line items.
 
-IMPORTANT — Currency detection:
-- Carefully detect the invoice currency. Look for currency symbols (¥, $, €, £), text like "CNY", "RMB", "USD", "AUD", or Chinese characters indicating Yuan/RMB.
-- GermanDrop invoices are almost always in CNY (Chinese Yuan ¥).
+IMPORTANT — Currency:
 - Return the ORIGINAL amounts as they appear on the invoice — do NOT convert currencies yourself.
-- Set "original_currency" to the detected currency code: "CNY", "USD", "AUD", "EUR", etc.
+- For Chinese platforms (1688, GermanDrop): always set original_currency = "CNY", use ¥ prices only.
+- For other invoices: detect currency from symbols/text and set original_currency accordingly.
+- IGNORE any USD/AUD amounts shown in brackets — those are just display conversions.
 
 Known SKUs in our system (match product names to these where possible):
 ${knownSkus || 'No existing SKUs yet — make your best guess from the product names.'}
 
 Return JSON in this exact format:
 {
-  "supplier": "germandrop or other supplier name",
+  "supplier": "1688 or germandrop or other supplier name",
   "invoice_date": "YYYY-MM-DD",
   "invoice_reference": "any PO/invoice number on the document",
   "original_currency": "CNY",
   "shipping_cost": 0,
-  "notes": "any relevant notes",
+  "notes": "any relevant notes (include product specs like color/size)",
   "lines": [
     {
-      "product_name": "exact name from invoice",
+      "product_name": "exact name from invoice including specs (color/size/variant)",
       "suggested_sku": "best matching SKU from known list, or null if no match",
       "sku_confidence": "high|medium|low|none",
       "quantity": 1,
@@ -223,14 +245,15 @@ Return JSON in this exact format:
 }
 
 Important:
-- shipping_cost is the total shipping on the invoice (not per unit), in the ORIGINAL currency
+- shipping_cost is the total shipping on the invoice (not per unit), in the ORIGINAL currency. If 包邮 (free shipping), set to 0.
 - All amounts (unit_cost, shipping_cost, invoice_total) must be in the ORIGINAL invoice currency
-- For GermanDrop: product names are often Chinese or model numbers — match by watch model/brand if possible
+- unit_cost = per-unit price, NOT order line total
+- Match product names to watch brands/models where possible
 - If a field is not on the invoice, use null`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
+      model: 'claude-sonnet-4-5-20250514',
       max_tokens: 2000,
       system: systemPrompt,
       messages: [
