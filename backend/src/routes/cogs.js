@@ -647,5 +647,94 @@ router.get('/entries/by-order', async (req, res) => {
   }
 });
 
+// ── GET /api/inventory/summary ───────────────────────────────────────────────
+// Returns current stock levels per SKU with values and sales velocity
+router.get('/inventory/summary', async (req, res) => {
+  const store = req.query.store || 'au';
+
+  try {
+    // 1. Get all lots with remaining stock
+    const { data: lots, error: lotsErr } = await supabase
+      .from('purchase_order_lines')
+      .select('sku, product_name, unit_cost, quantity_remaining, po_number')
+      .gt('quantity_remaining', 0);
+    if (lotsErr) return res.status(500).json({ error: lotsErr.message });
+    if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
+
+    // Group by SKU
+    const skuMap = {};
+    for (const lot of lots) {
+      if (!skuMap[lot.sku]) {
+        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, total_cost: 0, po_numbers: new Set() };
+      }
+      skuMap[lot.sku].quantity_remaining += lot.quantity_remaining;
+      skuMap[lot.sku].total_cost += lot.quantity_remaining * parseFloat(lot.unit_cost);
+      if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
+    }
+
+    // 2. Get sales this calendar month
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const { data: monthSales } = await supabase
+      .from('shopify_sales')
+      .select('sku, quantity_sold')
+      .gte('order_date', monthStart)
+      .eq('store', store);
+
+    const monthSoldMap = {};
+    for (const s of (monthSales || [])) {
+      monthSoldMap[s.sku] = (monthSoldMap[s.sku] || 0) + s.quantity_sold;
+    }
+
+    // 3. Get avg sale price per SKU (last 30 days)
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const { data: recentSales } = await supabase
+      .from('shopify_sales')
+      .select('sku, quantity_sold, sale_price')
+      .gte('order_date', thirtyDaysAgo)
+      .eq('store', store);
+
+    const salePriceMap = {}; // { sku: { totalRev, totalQty } }
+    for (const s of (recentSales || [])) {
+      if (!salePriceMap[s.sku]) salePriceMap[s.sku] = { totalRev: 0, totalQty: 0 };
+      const qty = s.quantity_sold || 0;
+      salePriceMap[s.sku].totalRev += qty * parseFloat(s.sale_price || 0);
+      salePriceMap[s.sku].totalQty += qty;
+    }
+
+    // 4. Build response
+    const skus = Object.values(skuMap).map(s => {
+      const avgUnitCost = s.quantity_remaining > 0 ? s.total_cost / s.quantity_remaining : 0;
+      const sp = salePriceMap[s.sku];
+      const avgSalePrice = sp && sp.totalQty > 0 ? sp.totalRev / sp.totalQty : 0;
+      return {
+        sku: s.sku,
+        product_name: s.product_name,
+        quantity_remaining: s.quantity_remaining,
+        unit_cost: Math.round(avgUnitCost * 100) / 100,
+        inventory_value: Math.round(s.total_cost * 100) / 100,
+        avg_sale_price: Math.round(avgSalePrice * 100) / 100,
+        retail_value: Math.round(s.quantity_remaining * avgSalePrice * 100) / 100,
+        units_sold_this_month: monthSoldMap[s.sku] || 0,
+        po_numbers: [...s.po_numbers],
+        low_stock: s.quantity_remaining < 10,
+      };
+    });
+
+    skus.sort((a, b) => (a.product_name || '').localeCompare(b.product_name || ''));
+
+    res.json({
+      skus,
+      total_inventory_value: Math.round(skus.reduce((s, r) => s + r.inventory_value, 0) * 100) / 100,
+      total_retail_value: Math.round(skus.reduce((s, r) => s + r.retail_value, 0) * 100) / 100,
+      total_skus: skus.length,
+      total_units: skus.reduce((s, r) => s + r.quantity_remaining, 0),
+    });
+  } catch (err) {
+    console.error('Inventory summary error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.buildCogsData = buildCogsData;

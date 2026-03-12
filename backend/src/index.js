@@ -25,6 +25,7 @@ app.use('/api/purchases', purchasesRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/cogs', cogsRouter);
+app.use('/api', cogsRouter); // also mounts /api/inventory/summary from cogsRouter
 app.use('/api/journal', journalRouter);
 app.use('/api/fulfillment', fulfillmentRouter);
 
