@@ -383,9 +383,9 @@ router.post('/germandrop/order-costs', async (req, res) => {
 // ── POST /api/purchases/recompute-cogs ────────────────────────────────────────
 // Manually trigger full COGS recompute (after editing lots)
 router.post('/recompute-cogs', async (req, res) => {
-  const { store = 'au' } = req.body;
+  const { store = 'au', start_date } = req.body;
   try {
-    const result = await recomputeAllCogs(store);
+    const result = await recomputeAllCogs(store, start_date || undefined);
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });

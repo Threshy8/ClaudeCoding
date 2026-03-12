@@ -17,7 +17,7 @@ const supabase = require('../db/supabase');
  * Run FIFO engine for a given store.
  * Returns summary of what was processed.
  */
-async function runFifoEngine(store = 'au') {
+async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
   const results = {
     processed: 0,
     skipped_no_lot: [],
@@ -88,6 +88,7 @@ async function runFifoEngine(store = 'au') {
   // 6. Group sales by order to calculate per-order unit counts (for GD shipping allocation)
   const orderUnitCounts = {};
   for (const s of sales) {
+    if (s.order_date < startDate) continue;
     if ((s.sku || '').toLowerCase().includes('x-redo')) continue;
     orderUnitCounts[s.shopify_order_id] = (orderUnitCounts[s.shopify_order_id] || 0) + s.quantity_sold;
   }
@@ -96,6 +97,9 @@ async function runFifoEngine(store = 'au') {
   const entriesToInsert = [];
 
   for (const sale of sales) {
+    // Skip sales before the opening stock date
+    if (sale.order_date < startDate) continue;
+
     // Skip x-redo lines
     if ((sale.sku || '').toLowerCase().includes('x-redo')) continue;
 
@@ -245,7 +249,7 @@ async function updatePoStatuses() {
  * Use this when purchase lots are edited/deleted.
  * WARNING: Deletes all existing cogs_entries and re-runs FIFO.
  */
-async function recomputeAllCogs(store = 'au') {
+async function recomputeAllCogs(store = 'au', startDate = '2026-03-12') {
   // Reset all lot quantities to original ordered quantities
   const { data: lines } = await supabase
     .from('purchase_order_lines')
@@ -265,7 +269,7 @@ async function recomputeAllCogs(store = 'au') {
     .eq('store', store);
 
   // Re-run FIFO
-  return runFifoEngine(store);
+  return runFifoEngine(store, startDate);
 }
 
 module.exports = { runFifoEngine, recomputeAllCogs };
