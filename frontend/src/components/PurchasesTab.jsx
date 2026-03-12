@@ -44,6 +44,21 @@ function StatusBadge({ status }) {
   );
 }
 
+function DestinationBadge({ destination }) {
+  const isDirect = destination === 'direct_to_customer' || !destination;
+  return (
+    <span style={{
+      padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
+      background: isDirect ? 'rgba(139,92,246,0.12)' : 'rgba(6,182,212,0.12)',
+      color: isDirect ? '#7c3aed' : '#0891b2',
+      border: `1px solid ${isDirect ? 'rgba(139,92,246,0.25)' : 'rgba(6,182,212,0.25)'}`,
+      letterSpacing: '0.03em', whiteSpace: 'nowrap',
+    }}>{isDirect ? 'GD Direct' : 'GD → SCC'}</span>
+  );
+}
+
+const CURRENCY_SYMBOLS = { CNY: '¥', USD: 'US$', EUR: '€', GBP: '£', AUD: '$' };
+
 // ─── Purchase Orders Sub-tab ──────────────────────────────────────────────────
 function PurchaseOrdersView() {
   const [orders, setOrders]         = useState([]);
@@ -155,6 +170,10 @@ function PurchaseOrdersView() {
           invoice_reference: data.parsed.invoice_reference || '',
           shipping_cost: data.parsed.shipping_cost || 0,
           notes: data.parsed.notes || '',
+          original_currency: data.parsed.original_currency || 'AUD',
+          exchange_rate: data.parsed.exchange_rate || 1,
+          exchange_rate_date: data.parsed.exchange_rate_date || null,
+          destination: 'direct_to_customer',
         });
         setParsed((data.parsed.lines || []).map((l, i) => ({
           _id: i,
@@ -163,6 +182,7 @@ function PurchaseOrdersView() {
           sku_confidence: l.sku_confidence || 'none',
           quantity: l.quantity || 1,
           unit_cost: l.unit_cost || 0,
+          original_unit_cost: l.original_unit_cost ?? null,
         })));
       }
     } catch (err) {
@@ -212,6 +232,9 @@ function PurchaseOrdersView() {
           supplier: parsedMeta?.supplier || 'Unknown',
           order_date: parsedMeta?.invoice_date || new Date().toISOString().split('T')[0],
           notes: parsedMeta?.notes || '',
+          destination: parsedMeta?.destination || 'direct_to_customer',
+          original_currency: parsedMeta?.original_currency || 'AUD',
+          exchange_rate: parsedMeta?.exchange_rate || 1,
           lines: parsed.map(r => ({
             sku: r.sku,
             product_name: r.product_name,
@@ -302,6 +325,36 @@ function PurchaseOrdersView() {
             </div>
           </div>
           {saveError && <div style={{ color: '#ef4444', fontSize: 12, marginBottom: 8 }}>{saveError}</div>}
+
+          {/* Currency conversion banner */}
+          {parsedMeta && parsedMeta.original_currency && parsedMeta.original_currency !== 'AUD' && (
+            <div style={{
+              padding: '10px 14px', marginBottom: 14, borderRadius: 8, fontSize: 13, fontWeight: 600,
+              background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.30)', color: '#b45309',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span style={{ fontSize: 16 }}>$</span>
+              Invoice currency: {parsedMeta.original_currency} → AUD @ {parsedMeta.exchange_rate} (live rate{parsedMeta.exchange_rate_date ? ` · ${parsedMeta.exchange_rate_date}` : ''})
+            </div>
+          )}
+
+          {/* Destination selector */}
+          {parsedMeta && (
+            <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Destination:</span>
+              <select
+                value={parsedMeta.destination || 'direct_to_customer'}
+                onChange={e => setParsedMeta(m => ({ ...m, destination: e.target.value }))}
+                style={{
+                  padding: '5px 10px', borderRadius: 6, fontSize: 13, border: '1px solid var(--border)',
+                  background: 'var(--bg)', color: 'var(--text)', cursor: 'pointer',
+                }}>
+                <option value="direct_to_customer">GD → Direct to customer</option>
+                <option value="scc_warehouse">GD → SCC Warehouse</option>
+              </select>
+            </div>
+          )}
+
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', fontSize: 13 }}>
               <thead>
@@ -310,13 +363,15 @@ function PurchaseOrdersView() {
                   <th style={{ padding: '6px 8px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>SKU</th>
                   <th style={{ padding: '6px 8px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', width: 60 }}>Match</th>
                   <th style={{ padding: '6px 8px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', width: 70 }}>Qty</th>
-                  <th style={{ padding: '6px 8px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', width: 110 }}>Unit Cost</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', width: 140 }}>Unit Cost</th>
                   <th style={{ padding: '6px 8px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', width: 110 }}>Total</th>
                 </tr>
               </thead>
               <tbody>
                 {parsed.map((row, i) => {
                   const confColor = { high: '#059669', medium: '#d97706', low: '#ef4444', none: '#6b7280' }[row.sku_confidence] || '#6b7280';
+                  const hasFx = parsedMeta && parsedMeta.original_currency && parsedMeta.original_currency !== 'AUD' && row.original_unit_cost != null;
+                  const sym = CURRENCY_SYMBOLS[parsedMeta?.original_currency] || parsedMeta?.original_currency || '';
                   return (
                     <tr key={row._id} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '6px 8px' }}>
@@ -335,8 +390,13 @@ function PurchaseOrdersView() {
                           style={{ width: '100%', padding: '4px 6px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 13, textAlign: 'right', background: 'var(--bg)' }} />
                       </td>
                       <td style={{ padding: '6px 8px' }}>
-                        <input type="number" step="0.01" value={row.unit_cost} onChange={e => updateParsedRow(i, 'unit_cost', e.target.value)}
-                          style={{ width: '100%', padding: '4px 6px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 13, textAlign: 'right', background: 'var(--bg)' }} />
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                          <input type="number" step="0.01" value={row.unit_cost} onChange={e => updateParsedRow(i, 'unit_cost', e.target.value)}
+                            style={{ width: '100%', padding: '4px 6px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 13, textAlign: 'right', background: 'var(--bg)' }} />
+                          {hasFx && (
+                            <span style={{ fontSize: 10, color: '#b45309' }}>{sym}{Number(row.original_unit_cost).toFixed(2)}</span>
+                          )}
+                        </div>
                       </td>
                       <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
                         {fmt((parseInt(row.quantity) || 0) * (parseFloat(row.unit_cost) || 0))}
@@ -377,7 +437,7 @@ function PurchaseOrdersView() {
           <table style={{ width: '100%', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                {['PO #', 'Supplier', 'Date', 'Status', 'Total Value', 'Units', 'Remaining', ''].map(h => (
+                {['PO #', 'Supplier', 'Date', 'Status', 'Dest', 'Total Value', 'Units', 'Remaining', ''].map(h => (
                   <th key={h} style={{
                     padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
                     textTransform: 'uppercase', letterSpacing: '0.06em',
@@ -397,6 +457,7 @@ function PurchaseOrdersView() {
                     <td style={{ padding: '10px' }}>{po.supplier}</td>
                     <td style={{ padding: '10px', color: 'var(--text-muted)', fontSize: 12 }}>{fmtDate(po.order_date)}</td>
                     <td style={{ padding: '10px' }}><StatusBadge status={po.status} /></td>
+                    <td style={{ padding: '10px' }}><DestinationBadge destination={po.destination} /></td>
                     <td style={{ padding: '10px', textAlign: 'right', fontWeight: 600 }}>{fmt(po.total_value)}</td>
                     <td style={{ padding: '10px', textAlign: 'right' }}>{po.total_units_ordered}</td>
                     <td style={{ padding: '10px', textAlign: 'right' }}>
@@ -421,7 +482,7 @@ function PurchaseOrdersView() {
                   </tr>
                   {expandedId === po.id && (
                     <tr>
-                      <td colSpan={8} style={{ padding: '0 0 12px 0', background: 'var(--bg-subtle)' }}>
+                      <td colSpan={9} style={{ padding: '0 0 12px 0', background: 'var(--bg-subtle)' }}>
                         <div style={{ padding: '12px 20px' }}>
                           {consLoading ? (
                             <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: 8 }}>Loading consumption…</div>

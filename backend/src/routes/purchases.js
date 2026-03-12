@@ -14,7 +14,7 @@ router.get('/orders', async (req, res) => {
   let query = supabase
     .from('purchase_orders')
     .select(`
-      id, po_number, supplier, order_date, notes, status, total_value, invoice_url, created_at,
+      id, po_number, supplier, order_date, notes, status, total_value, invoice_url, created_at, destination, original_currency, exchange_rate,
       purchase_order_lines (
         id, sku, product_name, quantity_ordered, quantity_remaining, unit_cost, total_cost, order_date
       )
@@ -98,7 +98,7 @@ router.get('/orders/:id/consumption', async (req, res) => {
 // ── POST /api/purchases/orders ────────────────────────────────────────────────
 // Create a PO manually (with line items)
 router.post('/orders', async (req, res) => {
-  const { supplier, order_date, notes, lines } = req.body;
+  const { supplier, order_date, notes, lines, destination, original_currency, exchange_rate } = req.body;
 
   if (!supplier || !order_date || !lines || lines.length === 0) {
     return res.status(400).json({ error: 'supplier, order_date, and lines are required' });
@@ -113,9 +113,14 @@ router.post('/orders', async (req, res) => {
   const total_value = lines.reduce((s, l) => s + (l.quantity * parseFloat(l.unit_cost || 0)), 0);
 
   // Insert PO header
+  const insertData = { po_number, supplier, order_date, notes, total_value, status: 'open' };
+  if (destination) insertData.destination = destination;
+  if (original_currency) insertData.original_currency = original_currency;
+  if (exchange_rate != null) insertData.exchange_rate = exchange_rate;
+
   const { data: po, error: poErr } = await supabase
     .from('purchase_orders')
-    .insert({ po_number, supplier, order_date, notes, total_value, status: 'open' })
+    .insert(insertData)
     .select()
     .single();
 
@@ -187,6 +192,12 @@ Always respond with valid JSON only — no markdown, no explanation.`;
 
   const userPrompt = `Parse this ${supplier || 'supplier'} invoice and extract all line items.
 
+IMPORTANT — Currency detection:
+- Carefully detect the invoice currency. Look for currency symbols (¥, $, €, £), text like "CNY", "RMB", "USD", "AUD", or Chinese characters indicating Yuan/RMB.
+- GermanDrop invoices are almost always in CNY (Chinese Yuan ¥).
+- Return the ORIGINAL amounts as they appear on the invoice — do NOT convert currencies yourself.
+- Set "original_currency" to the detected currency code: "CNY", "USD", "AUD", "EUR", etc.
+
 Known SKUs in our system (match product names to these where possible):
 ${knownSkus || 'No existing SKUs yet — make your best guess from the product names.'}
 
@@ -195,6 +206,7 @@ Return JSON in this exact format:
   "supplier": "germandrop or other supplier name",
   "invoice_date": "YYYY-MM-DD",
   "invoice_reference": "any PO/invoice number on the document",
+  "original_currency": "CNY",
   "shipping_cost": 0,
   "notes": "any relevant notes",
   "lines": [
@@ -207,14 +219,13 @@ Return JSON in this exact format:
       "total_cost": 0.00
     }
   ],
-  "invoice_total": 0.00,
-  "currency": "AUD"
+  "invoice_total": 0.00
 }
 
 Important:
-- shipping_cost is the total shipping on the invoice (not per unit)
+- shipping_cost is the total shipping on the invoice (not per unit), in the ORIGINAL currency
+- All amounts (unit_cost, shipping_cost, invoice_total) must be in the ORIGINAL invoice currency
 - For GermanDrop: product names are often Chinese or model numbers — match by watch model/brand if possible
-- unit_cost should be in AUD (convert if needed, note in currency field)
 - If a field is not on the invoice, use null`;
 
   try {
@@ -247,6 +258,43 @@ Important:
     } catch {
       return res.status(422).json({ error: 'Claude could not parse invoice', raw: rawText });
     }
+
+    // Currency conversion: if not AUD, fetch live exchange rate
+    const originalCurrency = (parsed.original_currency || 'AUD').toUpperCase();
+    let exchangeRate = 1.0;
+    let exchangeRateDate = null;
+
+    if (originalCurrency !== 'AUD') {
+      try {
+        const fxRes = await fetch(`https://open.er-api.com/v6/latest/${originalCurrency}`);
+        const fxData = await fxRes.json();
+        if (fxData.result === 'success' && fxData.rates?.AUD) {
+          exchangeRate = fxData.rates.AUD;
+          exchangeRateDate = fxData.time_last_update_utc ? new Date(fxData.time_last_update_utc).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        }
+      } catch (fxErr) {
+        console.error('FX rate fetch failed:', fxErr.message);
+        // Continue with rate=1, frontend will show warning
+      }
+
+      // Convert all amounts to AUD, preserve originals
+      parsed.original_shipping_cost = parsed.shipping_cost;
+      parsed.shipping_cost = Math.round((parsed.shipping_cost || 0) * exchangeRate * 100) / 100;
+
+      for (const line of (parsed.lines || [])) {
+        line.original_unit_cost = line.unit_cost;
+        line.original_total_cost = line.total_cost;
+        line.unit_cost = Math.round((line.unit_cost || 0) * exchangeRate * 100) / 100;
+        line.total_cost = Math.round((line.total_cost || 0) * exchangeRate * 100) / 100;
+      }
+
+      parsed.original_invoice_total = parsed.invoice_total;
+      parsed.invoice_total = Math.round((parsed.invoice_total || 0) * exchangeRate * 100) / 100;
+    }
+
+    parsed.original_currency = originalCurrency;
+    parsed.exchange_rate = Math.round(exchangeRate * 10000) / 10000;
+    parsed.exchange_rate_date = exchangeRateDate || new Date().toISOString().split('T')[0];
 
     res.json({ success: true, parsed });
   } catch (err) {
