@@ -75,10 +75,10 @@ export default function Dashboard({ dateRange }) {
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-label">Revenue</div>
-          <div className="kpi-value">{mc(_fmt(totalRevenue))}</div>
+          <div className="kpi-value">{mc(_fmt(totalCollected))}</div>
           {redoFees > 0 && (
             <div className="kpi-sub" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              + {mc(_fmt(redoFees))} Redo fees &middot; {mc(_fmt(totalCollected))} total collected
+              excl. {mc(_fmt(redoFees))} Redo fees
             </div>
           )}
           <div className="kpi-sub">{rangeLabel}</div>
