@@ -162,6 +162,16 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     }
   }
 
+  // --- Redo fees (x-redo line items in the period) ---
+  const { data: redoRows } = await supabase
+    .from('shopify_sales')
+    .select('quantity_sold, sale_price')
+    .gte('order_date', periodStart)
+    .lt('order_date', periodEnd)
+    .eq('sku', 'x-redo');
+
+  const redoFees = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+
   // --- Totals ---
   const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
   const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
@@ -176,6 +186,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     total_cogs: Math.round(totalCogs * 100) / 100,
     total_inventory_value: Math.round(totalInventoryValue * 100) / 100,
     gross_margin_pct: Math.round(overallMargin * 100) / 100,
+    redo_fees: Math.round(redoFees * 100) / 100,
     sku_breakdown: skuBreakdown,
   };
 }
@@ -551,6 +562,17 @@ router.get('/entries/by-sku', async (req, res) => {
       }
     }
 
+    // Redo fees (x-redo line items in the period)
+    const { data: redoRows } = await supabase
+      .from('shopify_sales')
+      .select('quantity_sold, sale_price')
+      .gte('order_date', start_date)
+      .lte('order_date', end_date)
+      .eq('store', store)
+      .eq('sku', 'x-redo');
+
+    const redoFees = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+
     const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
     const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
     const totalInvValue = skuBreakdown.reduce((s, r) => s + r.inventory_value, 0);
@@ -561,6 +583,7 @@ router.get('/entries/by-sku', async (req, res) => {
       total_cogs: Math.round(totalCogs * 100) / 100,
       total_inventory_value: Math.round(totalInvValue * 100) / 100,
       gross_margin_pct: totalRevenue > 0 ? Math.round((totalRevenue - totalCogs) / totalRevenue * 10000) / 100 : 0,
+      redo_fees: Math.round(redoFees * 100) / 100,
       sku_breakdown: skuBreakdown,
     });
   } catch (err) {

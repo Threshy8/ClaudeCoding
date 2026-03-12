@@ -59,6 +59,8 @@ export default function Dashboard({ dateRange }) {
 
   const rows = (skuData.sku_breakdown || []).filter(r => !(r.sku || '').toLowerCase().includes('x-redo'));
   const totalRevenue = rows.reduce((s, r) => s + (r.revenue || 0), 0);
+  const redoFees = skuData.redo_fees || 0;
+  const totalCollected = totalRevenue + redoFees;
   const totalCogs = rows.reduce((s, r) => s + (r.cogs || 0), 0);
   const grossProfit = totalRevenue - totalCogs;
   const margin = totalRevenue > 0 ? Math.round(grossProfit / totalRevenue * 100) : null;
@@ -74,6 +76,11 @@ export default function Dashboard({ dateRange }) {
         <div className="kpi-card">
           <div className="kpi-label">Revenue</div>
           <div className="kpi-value">{mc(_fmt(totalRevenue))}</div>
+          {redoFees > 0 && (
+            <div className="kpi-sub" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              + {mc(_fmt(redoFees))} Redo fees &middot; {mc(_fmt(totalCollected))} total collected
+            </div>
+          )}
           <div className="kpi-sub">{rangeLabel}</div>
         </div>
         <div className="kpi-card">
