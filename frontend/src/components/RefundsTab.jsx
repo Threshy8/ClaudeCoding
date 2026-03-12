@@ -28,7 +28,8 @@ function daysBetween(d1, d2) {
   return Math.round(diff);
 }
 
-export default function RefundsTab({ dateRange }) {
+// ─── Refunds Sub-tab ──────────────────────────────────────────────────────────
+function RefundsView({ dateRange }) {
   const [refunds, setRefunds]     = useState([]);
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState(null);
@@ -105,8 +106,7 @@ export default function RefundsTab({ dateRange }) {
   const skuSummary = Object.values(bySku).sort((a, b) => b.units - a.units);
 
   return (
-    <div style={{ padding: '24px 32px' }}>
-
+    <div>
       {/* Summary cards */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
         {[
@@ -234,6 +234,134 @@ export default function RefundsTab({ dateRange }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Resends Sub-tab ──────────────────────────────────────────────────────────
+function ResendsView({ dateRange }) {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(null);
+
+  useEffect(() => {
+    if (!dateRange?.start || !dateRange?.end) return;
+    setLoading(true);
+    setError(null);
+    const params = new URLSearchParams({ store: 'au', start_date: dateRange.start, end_date: dateRange.end });
+    apiFetch(`/api/cogs/resends?${params}`)
+      .then(setData)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [dateRange]);
+
+  const summary = data?.summary || { total_resends: 0, total_units_resent: 0, total_estimated_cogs: 0 };
+  const orders = data?.orders || [];
+  const avgCostPerResend = summary.total_resends > 0
+    ? Math.round(summary.total_estimated_cogs / summary.total_resends * 100) / 100
+    : 0;
+
+  const locationLabel = (loc) => {
+    const l = (loc || '').toLowerCase();
+    if (l.includes('southern cross') || l.includes('beverley')) return <span style={{ color: '#06b6d4', fontWeight: 600 }}>SCC</span>;
+    if (l.includes('gd-fulfillment')) return <span style={{ color: '#8b5cf6', fontWeight: 600 }}>GD</span>;
+    return <span style={{ color: 'var(--text-muted)' }}>Self</span>;
+  };
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+        {[
+          { label: 'Total Resends', value: summary.total_resends, sub: 'orders' },
+          { label: 'Units Resent', value: summary.total_units_resent, sub: 'items' },
+          { label: 'Estimated COGS', value: fmt(summary.total_estimated_cogs), sub: 'cost of resends' },
+          { label: 'Avg Cost per Resend', value: fmt(avgCostPerResend), sub: 'per order' },
+        ].map(c => (
+          <div key={c.label} style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: 10, padding: '16px 20px', minWidth: 160, flex: 1,
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 6 }}>{c.label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>{c.value}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{c.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {error && <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+
+      {loading ? (
+        <div className="text-muted" style={{ fontSize: 13, padding: 16 }}>Loading resends…</div>
+      ) : orders.length === 0 ? (
+        <div className="text-muted" style={{ fontSize: 13, padding: 16 }}>No resend orders found for this period.</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                {['Order #', 'Original Order', 'Customer', 'Date', 'SKUs / Products', 'Units', 'Est. COGS', 'Via'].map(h => (
+                  <th key={h} style={{
+                    padding: '8px 10px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+                    textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap',
+                    textAlign: ['Units', 'Est. COGS'].includes(h) ? 'right' : 'left',
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map(o => (
+                <tr key={o.shopify_order_id} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={{ padding: '8px 10px' }}>
+                    <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>#{o.order_number}</span>
+                  </td>
+                  <td style={{ padding: '8px 10px' }}>
+                    <span className="mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>#{o.original_order_number}</span>
+                  </td>
+                  <td style={{ padding: '8px 10px', fontSize: 13 }}>{o.customer_name}</td>
+                  <td style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: 12 }}>{fmtDate(o.order_date)}</td>
+                  <td style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: 12, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {o.line_items.map(li => `${li.sku} x${li.qty}`).join(', ')}
+                  </td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{o.total_units}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>{fmt(o.estimated_cogs)}</td>
+                  <td style={{ padding: '8px 10px', fontSize: 12 }}>{locationLabel(o.fulfillment_location)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--bg-subtle)' }}>
+                <td colSpan={5} style={{ padding: '8px 10px', fontWeight: 700, fontSize: 12 }}>Total ({orders.length} resends)</td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{summary.total_units_resent}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#ef4444' }}>{fmt(summary.total_estimated_cogs)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main RefundsTab ──────────────────────────────────────────────────────────
+export default function RefundsTab({ dateRange }) {
+  const [subTab, setSubTab] = useState('refunds');
+
+  return (
+    <div style={{ padding: '24px 32px' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {[['refunds', 'Refunds'], ['resends', 'Resends']].map(([key, label]) => (
+          <button key={key} onClick={() => setSubTab(key)} style={{
+            padding: '7px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            border: '1px solid var(--border)',
+            background: subTab === key ? 'var(--accent)' : 'var(--bg-card)',
+            color: subTab === key ? '#fff' : 'var(--text)',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {subTab === 'refunds' ? <RefundsView dateRange={dateRange} /> : <ResendsView dateRange={dateRange} />}
     </div>
   );
 }

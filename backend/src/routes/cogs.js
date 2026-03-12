@@ -364,5 +364,83 @@ router.get('/refunds', async (req, res) => {
   res.json(data);
 });
 
+// ── GET /api/cogs/resends ────────────────────────────────────────────────────
+// Returns resend orders (order_number contains '-RESEND') with estimated COGS
+router.get('/resends', async (req, res) => {
+  const { start_date, end_date, store = 'au' } = req.query;
+
+  // Get all purchases for avg cost calculation
+  const { data: purchases, error: pErr } = await supabase
+    .from('purchases')
+    .select('sku, quantity, unit_cost');
+  if (pErr) return res.status(500).json({ error: pErr.message });
+
+  const costMap = {};
+  for (const p of (purchases || [])) {
+    if (!costMap[p.sku]) costMap[p.sku] = { totalCost: 0, totalQty: 0 };
+    costMap[p.sku].totalCost += p.unit_cost * p.quantity;
+    costMap[p.sku].totalQty  += p.quantity;
+  }
+  const avgCost = (sku) => {
+    const c = costMap[sku];
+    return c && c.totalQty > 0 ? c.totalCost / c.totalQty : 0;
+  };
+
+  // Query resend orders
+  let query = supabase
+    .from('shopify_sales')
+    .select('shopify_order_id, order_number, customer_name, sku, product_name, quantity_sold, order_date, fulfillment_location')
+    .eq('store', store)
+    .ilike('order_number', '%-RESEND%')
+    .order('order_date', { ascending: false });
+
+  if (start_date) query = query.gte('order_date', start_date);
+  if (end_date)   query = query.lte('order_date', end_date);
+
+  const { data: sales, error: sErr } = await query;
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  // Group by order
+  const orderMap = {};
+  for (const s of (sales || [])) {
+    if (!orderMap[s.shopify_order_id]) {
+      const originalOrderNumber = (s.order_number || '').replace(/-RESEND.*$/i, '');
+      orderMap[s.shopify_order_id] = {
+        shopify_order_id:      s.shopify_order_id,
+        order_number:          s.order_number || s.shopify_order_id,
+        original_order_number: originalOrderNumber,
+        customer_name:         s.customer_name || '—',
+        order_date:            s.order_date,
+        fulfillment_location:  s.fulfillment_location || 'Unknown',
+        line_items:            [],
+        total_units:           0,
+        estimated_cogs:        0,
+        notes:                 null,
+      };
+    }
+    const o = orderMap[s.shopify_order_id];
+    const qty = s.quantity_sold || 0;
+    const cogs = qty * avgCost(s.sku);
+    o.line_items.push({ sku: s.sku, product_name: s.product_name, qty });
+    o.total_units    += qty;
+    o.estimated_cogs += cogs;
+  }
+
+  const orders = Object.values(orderMap).map(o => ({
+    ...o,
+    estimated_cogs: Math.round(o.estimated_cogs * 100) / 100,
+  }));
+
+  orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
+
+  const summary = {
+    total_resends:       orders.length,
+    total_units_resent:  orders.reduce((s, o) => s + o.total_units, 0),
+    total_estimated_cogs: Math.round(orders.reduce((s, o) => s + o.estimated_cogs, 0) * 100) / 100,
+  };
+
+  res.json({ summary, orders });
+});
+
 module.exports = router;
 module.exports.buildCogsData = buildCogsData;
