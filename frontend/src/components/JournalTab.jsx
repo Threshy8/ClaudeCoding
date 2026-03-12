@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { getCogsSummary, exportJournal } from '../api';
 import { triggerLabel } from './DateRangePicker';
+import { useDemoMask } from '../contexts/DemoModeContext';
 
-function fmt(n) {
+function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
 }
 
@@ -24,6 +25,7 @@ export default function JournalTab({ dateRange }) {
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState(null);
+  const { mc, mn } = useDemoMask();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -86,15 +88,15 @@ export default function JournalTab({ dateRange }) {
           </div>
           <div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Total COGS DR</div>
-            <div style={{ fontWeight: 700, color: 'var(--red)' }}>{fmt(data.total_cogs)}</div>
+            <div style={{ fontWeight: 700, color: 'var(--red)' }}>{mc(_fmt(data.total_cogs))}</div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Total Inventory CR</div>
-            <div style={{ fontWeight: 700, color: 'var(--green)' }}>{fmt(data.total_cogs)}</div>
+            <div style={{ fontWeight: 700, color: 'var(--green)' }}>{mc(_fmt(data.total_cogs))}</div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>SKUs with Sales</div>
-            <div style={{ fontWeight: 700 }}>{data.sku_breakdown.filter((s) => s.cogs > 0).length}</div>
+            <div style={{ fontWeight: 700 }}>{mn(data.sku_breakdown.filter((s) => s.cogs > 0).length)}</div>
           </div>
         </div>
       </div>
@@ -143,9 +145,9 @@ export default function JournalTab({ dateRange }) {
                       <td><span className="mono">5000</span> <span className="text-muted">— COGS</span></td>
                       <td style={{ fontSize: 12 }}>
                         COGS – {row.product_name} ({row.sku})<br />
-                        <span className="text-muted">{row.units_sold} units @ {fmt(row.avg_unit_cost)}</span>
+                        <span className="text-muted">{mn(row.units_sold)} units @ {mc(_fmt(row.avg_unit_cost))}</span>
                       </td>
-                      <td className="text-right" style={{ color: 'var(--red)' }}>{fmt(row.cogs)}</td>
+                      <td className="text-right" style={{ color: 'var(--red)' }}>{mc(_fmt(row.cogs))}</td>
                       <td className="text-right text-muted">—</td>
                     </tr>
                     <tr>
@@ -153,7 +155,7 @@ export default function JournalTab({ dateRange }) {
                       <td><span className="mono">1500</span> <span className="text-muted">— Inventory</span></td>
                       <td style={{ fontSize: 12 }}>Inventory reduction – {row.product_name} ({row.sku})</td>
                       <td className="text-right text-muted">—</td>
-                      <td className="text-right" style={{ color: 'var(--green)' }}>{fmt(row.cogs)}</td>
+                      <td className="text-right" style={{ color: 'var(--green)' }}>{mc(_fmt(row.cogs))}</td>
                     </tr>
                   </React.Fragment>
                 ))}
@@ -161,8 +163,8 @@ export default function JournalTab({ dateRange }) {
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
                   <td colSpan={3} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL</td>
-                  <td className="text-right" style={{ color: 'var(--red)' }}>{fmt(data.total_cogs)}</td>
-                  <td className="text-right" style={{ color: 'var(--green)' }}>{fmt(data.total_cogs)}</td>
+                  <td className="text-right" style={{ color: 'var(--red)' }}>{mc(_fmt(data.total_cogs))}</td>
+                  <td className="text-right" style={{ color: 'var(--green)' }}>{mc(_fmt(data.total_cogs))}</td>
                 </tr>
               </tfoot>
             </table>

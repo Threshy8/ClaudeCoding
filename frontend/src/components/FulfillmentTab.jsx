@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useDemoMask } from '../contexts/DemoModeContext';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
-function fmt(n) {
+function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
 }
 function fmtDate(d) {
@@ -76,6 +77,7 @@ function InvoicesView({ dateRange }) {
   const [invoiceSummary, setInvoiceSummary]   = useState(null);
   const [summaryLoading, setSummaryLoading]   = useState(false);
   const fileRef = useRef();
+  const { mc, mn } = useDemoMask();
 
   const generateSummary = async (parsedData) => {
     setSummaryLoading(true); setInvoiceSummary(null);
@@ -178,10 +180,10 @@ function InvoicesView({ dateRange }) {
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
           {[
-            { label: 'Total 3PL Cost', value: fmt(summary.total), sub: `Ex GST · ${dateRange?.label || 'Period'}`, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
-            { label: 'Fixed Costs', value: fmt(summary.fixed), sub: 'Storage, receiving, labour', color: COST_TYPE_COLOR.fixed, bg: `${COST_TYPE_COLOR.fixed}0f` },
-            { label: 'Variable Costs', value: fmt(summary.variable), sub: 'Pick/pack, dispatch per order', color: COST_TYPE_COLOR.variable, bg: `${COST_TYPE_COLOR.variable}0f` },
-            { label: 'Variable / Unit', value: summary.cost_per_unit > 0 ? fmt(summary.cost_per_unit) : '—', sub: summary.units_shipped > 0 ? `${summary.units_shipped} units shipped` : 'No units data', color: 'var(--text-primary)', bg: 'var(--bg-card)' },
+            { label: 'Total 3PL Cost', value: mc(_fmt(summary.total)), sub: `Ex GST · ${dateRange?.label || 'Period'}`, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
+            { label: 'Fixed Costs', value: mc(_fmt(summary.fixed)), sub: 'Storage, receiving, labour', color: COST_TYPE_COLOR.fixed, bg: `${COST_TYPE_COLOR.fixed}0f` },
+            { label: 'Variable Costs', value: mc(_fmt(summary.variable)), sub: 'Pick/pack, dispatch per order', color: COST_TYPE_COLOR.variable, bg: `${COST_TYPE_COLOR.variable}0f` },
+            { label: 'Variable / Unit', value: summary.cost_per_unit > 0 ? mc(_fmt(summary.cost_per_unit)) : '—', sub: summary.units_shipped > 0 ? `${mn(summary.units_shipped)} units shipped` : 'No units data', color: 'var(--text-primary)', bg: 'var(--bg-card)' },
           ].map(({ label, value, sub, color, bg }) => (
             <div key={label} style={{ background: bg, border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px' }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>{label}</div>
@@ -215,7 +217,7 @@ function InvoicesView({ dateRange }) {
               <div className="text-muted" style={{ fontSize: 13 }}>
                 {parsed.period_description || 'No period'} · {fmtDate(parsed.invoice_date)}
                 {parsed.invoice_ref   && ` · Ref: ${parsed.invoice_ref}`}
-                {parsed.units_shipped && ` · ${parsed.units_shipped} units shipped`}
+                {parsed.units_shipped && ` · ${mn(parsed.units_shipped)} units shipped`}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -274,10 +276,10 @@ function InvoicesView({ dateRange }) {
                         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
                       )}
                     </td>
-                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.quantity ?? '—'}</td>
-                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.unit_rate ? fmt(li.unit_rate) : '—'}</td>
-                    <td className="text-right" style={{ fontSize: 13, fontWeight: 500 }}>{fmt(li.amount_ex_gst)}</td>
-                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{fmt(li.gst)}</td>
+                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{mn(li.quantity ?? '—')}</td>
+                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.unit_rate ? mc(_fmt(li.unit_rate)) : '—'}</td>
+                    <td className="text-right" style={{ fontSize: 13, fontWeight: 500 }}>{mc(_fmt(li.amount_ex_gst))}</td>
+                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{mc(_fmt(li.gst))}</td>
                   </tr>
                 ))}
               </tbody>
@@ -285,10 +287,10 @@ function InvoicesView({ dateRange }) {
                 <tr style={{ borderTop: '2px solid var(--border)' }}>
                   <td colSpan={6} style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>Total</td>
                   <td className="text-right" style={{ fontWeight: 700, fontSize: 14, paddingTop: 10 }}>
-                    {fmt(parsed.line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0))}
+                    {mc(_fmt(parsed.line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0)))}
                   </td>
                   <td className="text-right" style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>
-                    {fmt(parsed.line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0))}
+                    {mc(_fmt(parsed.line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0)))}
                   </td>
                 </tr>
               </tfoot>
@@ -306,7 +308,7 @@ function InvoicesView({ dateRange }) {
               const color = colorMap[key];
               return (
                 <div key={key} style={{ padding: '5px 12px', borderRadius: 20, background: `${color}18`, border: `1px solid ${color}40`, fontSize: 12, color, fontWeight: 600 }}>
-                  {label}: {fmt(total)}
+                  {label}: {mc(_fmt(total))}
                 </div>
               );
             })}
@@ -344,15 +346,15 @@ function InvoicesView({ dateRange }) {
                           <span style={{ fontWeight: 500 }}>{inv.period_description || '—'}</span>
                           {inv.invoice_ref && <span className="text-muted" style={{ fontSize: 12, marginLeft: 8 }}>{inv.invoice_ref}</span>}
                         </td>
-                        <td className="text-right">{inv.units_shipped ?? '—'}</td>
+                        <td className="text-right">{mn(inv.units_shipped ?? '—')}</td>
                         <td className="text-right" style={{ color: COST_TYPE_COLOR.fixed }}>
                           <InvoiceCostTypTotal invoiceId={inv.id} lineItems={lineItems} costType="fixed" />
                         </td>
                         <td className="text-right" style={{ color: COST_TYPE_COLOR.variable }}>
                           <InvoiceCostTypTotal invoiceId={inv.id} lineItems={lineItems} costType="variable" />
                         </td>
-                        <td className="text-right" style={{ fontWeight: 600 }}>{fmt(inv.total_ex_gst)}</td>
-                        <td className="text-right text-muted">{fmt(inv.total_inc_gst)}</td>
+                        <td className="text-right" style={{ fontWeight: 600 }}>{mc(_fmt(inv.total_ex_gst))}</td>
+                        <td className="text-right text-muted">{mc(_fmt(inv.total_inc_gst))}</td>
                         <td onClick={e => e.stopPropagation()}>
                           <PaymentStatusCell inv={inv} onUpdate={(updated) => {
                             setInvoices(prev => prev.map(i => i.id === updated.id ? { ...i, ...updated } : i));
@@ -387,27 +389,27 @@ function InvoicesView({ dateRange }) {
                                   const r = matchedOrders[inv.id].reconciliation;
                                   if (r.matched === true) return (
                                     <div style={{ fontSize: 12, background: '#22c55e18', border: '1px solid #22c55e40', borderRadius: 6, padding: '6px 10px', marginBottom: 10, color: '#16a34a', display: 'flex', gap: 8, alignItems: 'center' }}>
-                                      ✓ <strong>Reconciled</strong> — Invoice shows {r.invoice_dispatched} dispatches, Shopify shows {r.shopify_scc_orders} SCC orders. Exact match.
+                                      ✓ <strong>Reconciled</strong> — Invoice shows {mn(r.invoice_dispatched)} dispatches, Shopify shows {mn(r.shopify_scc_orders)} SCC orders. Exact match.
                                     </div>
                                   );
                                   if (r.matched === false) return (
                                     <div style={{ fontSize: 12, background: '#ef444418', border: '1px solid #ef444440', borderRadius: 6, padding: '6px 10px', marginBottom: 10, color: '#dc2626', display: 'flex', gap: 8, alignItems: 'center' }}>
-                                      ⚠ <strong>Mismatch</strong> — Invoice shows {r.invoice_dispatched} dispatches, Shopify shows {r.shopify_scc_orders} SCC orders ({r.shopify_scc_orders - r.invoice_dispatched > 0 ? '+' : ''}{r.shopify_scc_orders - r.invoice_dispatched}). Costs may be approximate.
+                                      ⚠ <strong>Mismatch</strong> — Invoice shows {mn(r.invoice_dispatched)} dispatches, Shopify shows {mn(r.shopify_scc_orders)} SCC orders ({r.shopify_scc_orders - r.invoice_dispatched > 0 ? '+' : ''}{mn(r.shopify_scc_orders - r.invoice_dispatched)}). Costs may be approximate.
                                     </div>
                                   );
                                   return (
                                     <div style={{ fontSize: 12, background: '#f59e0b18', border: '1px solid #f59e0b40', borderRadius: 6, padding: '6px 10px', marginBottom: 10, color: '#d97706' }}>
-                                      ℹ Shopify shows {r.shopify_scc_orders} SCC orders — invoice dispatch count unknown.
+                                      ℹ Shopify shows {mn(r.shopify_scc_orders)} SCC orders — invoice dispatch count unknown.
                                     </div>
                                   );
                                 })()}
                                 {matchedOrders[inv.id]?.cost_method === 'accurate' && (
                                   <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>
-                                      {fmt(matchedOrders[inv.id].rate_per_order)} per order (flat)
+                                      {mc(_fmt(matchedOrders[inv.id].rate_per_order))} per order (flat)
                                     </span>
                                     <span style={{ fontSize: 12, color: '#8b5cf6', fontWeight: 600 }}>
-                                      + {fmt(matchedOrders[inv.id].rate_per_unit)} per unit
+                                      + {mc(_fmt(matchedOrders[inv.id].rate_per_unit))} per unit
                                     </span>
                                   </div>
                                 )}
@@ -432,12 +434,12 @@ function InvoicesView({ dateRange }) {
                                             <span className="mono" style={{ fontSize: 11 }}>#{order.order_number || order.shopify_order_id}</span>
                                           </td>
                                           <td style={{ padding: '6px 8px', color: 'var(--text-muted)', maxWidth: 220 }}>
-                                            {order.line_items.map(li => `${li.sku} ×${li.quantity}`).join(', ')}
+                                            {order.line_items.map(li => `${li.sku} ×${mn(li.quantity)}`).join(', ')}
                                           </td>
-                                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{order.total_units}</td>
-                                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(order.total_revenue)}</td>
+                                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{mn(order.total_units)}</td>
+                                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{mc(_fmt(order.total_revenue))}</td>
                                           <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: order.variable_3pl_cost > 0 ? COST_TYPE_COLOR.variable : 'var(--text-muted)' }}>
-                                            {order.variable_3pl_cost > 0 ? fmt(order.variable_3pl_cost) : '—'}
+                                            {order.variable_3pl_cost > 0 ? mc(_fmt(order.variable_3pl_cost)) : '—'}
                                           </td>
                                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                                             {order.is_scc
@@ -450,9 +452,9 @@ function InvoicesView({ dateRange }) {
                                     <tfoot>
                                       <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}>
                                         <td colSpan={3} style={{ padding: '8px 8px 4px 0', fontSize: 12 }}>Total</td>
-                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right' }}>{matchedOrders[inv.id].orders.reduce((s, o) => s + o.total_units, 0)}</td>
-                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right' }}>{fmt(matchedOrders[inv.id].orders.reduce((s, o) => s + o.total_revenue, 0))}</td>
-                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right', color: COST_TYPE_COLOR.variable }}>{fmt(matchedOrders[inv.id].orders.reduce((s, o) => s + o.variable_3pl_cost, 0))}</td>
+                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right' }}>{mn(matchedOrders[inv.id].orders.reduce((s, o) => s + o.total_units, 0))}</td>
+                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right' }}>{mc(_fmt(matchedOrders[inv.id].orders.reduce((s, o) => s + o.total_revenue, 0)))}</td>
+                                        <td style={{ padding: '8px 8px 4px', textAlign: 'right', color: COST_TYPE_COLOR.variable }}>{mc(_fmt(matchedOrders[inv.id].orders.reduce((s, o) => s + o.variable_3pl_cost, 0)))}</td>
                                         <td></td>
                                       </tr>
                                     </tfoot>
@@ -482,6 +484,7 @@ function CostSheetView({ dateRange }) {
   const [error, setError]           = useState(null);
   const [expandedOrder, setExpandedOrder] = useState(null);
   const [selectedLocation, setSelectedLocation] = useState('all');
+  const { mc, mn } = useDemoMask();
 
   const load = useCallback(async (location) => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -544,28 +547,28 @@ function CostSheetView({ dateRange }) {
       <div className="stats-grid" style={{ marginBottom: 24 }}>
         <div className="stat-card">
           <div className="stat-label">Grand Total 3PL</div>
-          <div className="stat-value">{fmt(grand_total_3pl)}</div>
+          <div className="stat-value">{mc(_fmt(grand_total_3pl))}</div>
           <div className="stat-sub">{dateRange?.label || 'Period'} · Ex GST</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Fixed Costs (One-time)</div>
-          <div className="stat-value" style={{ color: COST_TYPE_COLOR.fixed }}>{fmt(fixed_costs.total)}</div>
+          <div className="stat-value" style={{ color: COST_TYPE_COLOR.fixed }}>{mc(_fmt(fixed_costs.total))}</div>
           <div className="stat-sub">Storage, receiving, freight</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Variable Cost / Unit</div>
           <div className="stat-value" style={{ color: COST_TYPE_COLOR.variable }}>
-            {variable_costs.cost_per_unit > 0 ? fmt(variable_costs.cost_per_unit) : '—'}
+            {variable_costs.cost_per_unit > 0 ? mc(_fmt(variable_costs.cost_per_unit)) : '—'}
           </div>
           <div className="stat-sub">
             {variable_costs.units_shipped > 0
-              ? `${variable_costs.units_shipped} units · ${fmt(variable_costs.total)} total`
+              ? `${mn(variable_costs.units_shipped)} units · ${mc(_fmt(variable_costs.total))} total`
               : 'No invoice data'}
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Orders Shown</div>
-          <div className="stat-value">{orders.length}</div>
+          <div className="stat-value">{mn(orders.length)}</div>
           <div className="stat-sub">
             {selectedLocation === 'all' ? 'All locations' : selectedLocation}
           </div>
@@ -589,7 +592,7 @@ function CostSheetView({ dateRange }) {
                 <div style={{ fontWeight: 700, fontSize: 14 }}>Fixed / One-Time Costs</div>
                 <div className="text-muted" style={{ fontSize: 12, marginTop: 2 }}>Period costs — not allocated per order</div>
               </div>
-              <div style={{ fontWeight: 700, fontSize: 18, color: COST_TYPE_COLOR.fixed }}>{fmt(fixed_costs.total)}</div>
+              <div style={{ fontWeight: 700, fontSize: 18, color: COST_TYPE_COLOR.fixed }}>{mc(_fmt(fixed_costs.total))}</div>
             </div>
           </div>
           <div className="table-wrap">
@@ -610,7 +613,7 @@ function CostSheetView({ dateRange }) {
                         {CATEGORY_LABEL[li.category] || li.category}
                       </span>
                     </td>
-                    <td className="text-right" style={{ fontWeight: 500 }}>{fmt(li.amount)}</td>
+                    <td className="text-right" style={{ fontWeight: 500 }}>{mc(_fmt(li.amount))}</td>
                   </tr>
                 ))}
               </tbody>
@@ -624,7 +627,7 @@ function CostSheetView({ dateRange }) {
         <div className="section-title">Per-Order Variable Cost Breakdown</div>
         {variable_costs.cost_per_unit > 0 && (
           <div className="text-muted" style={{ fontSize: 12 }}>
-            {fmt(variable_costs.cost_per_unit)} per unit × order quantity
+            {mc(_fmt(variable_costs.cost_per_unit))} per unit × order quantity
           </div>
         )}
       </div>
@@ -663,12 +666,12 @@ function CostSheetView({ dateRange }) {
                         </span>
                       </td>
                       <td style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 200 }}>
-                        {order.line_items.map(li => `${li.sku} ×${li.quantity}`).join(', ')}
+                        {order.line_items.map(li => `${li.sku} ×${mn(li.quantity)}`).join(', ')}
                       </td>
-                      <td className="text-right">{order.total_units}</td>
-                      <td className="text-right">{fmt(order.total_revenue)}</td>
+                      <td className="text-right">{mn(order.total_units)}</td>
+                      <td className="text-right">{mc(_fmt(order.total_revenue))}</td>
                       <td className="text-right" style={{ fontWeight: 600, color: variable_costs.cost_per_unit > 0 ? COST_TYPE_COLOR.variable : 'var(--text-muted)' }}>
-                        {variable_costs.cost_per_unit > 0 ? fmt(order.variable_3pl_cost) : '—'}
+                        {variable_costs.cost_per_unit > 0 ? mc(_fmt(order.variable_3pl_cost)) : '—'}
                       </td>
                       <td>
                         <button
@@ -697,9 +700,9 @@ function CostSheetView({ dateRange }) {
                                   <tr key={i}>
                                     <td style={{ padding: '3px 0' }}><span className="mono">{li.sku}</span></td>
                                     <td style={{ padding: '3px 0', color: 'var(--text-muted)' }}>{li.product_name}</td>
-                                    <td style={{ padding: '3px 0', textAlign: 'right' }}>{li.quantity}</td>
+                                    <td style={{ padding: '3px 0', textAlign: 'right' }}>{mn(li.quantity)}</td>
                                     <td style={{ padding: '3px 0', textAlign: 'right', fontWeight: 500 }}>
-                                      {variable_costs.cost_per_unit > 0 ? fmt(li.quantity * variable_costs.cost_per_unit) : '—'}
+                                      {variable_costs.cost_per_unit > 0 ? mc(_fmt(li.quantity * variable_costs.cost_per_unit)) : '—'}
                                     </td>
                                   </tr>
                                 ))}
@@ -715,10 +718,10 @@ function CostSheetView({ dateRange }) {
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}>
                   <td colSpan={4} style={{ paddingTop: 10 }}>Total</td>
-                  <td className="text-right" style={{ paddingTop: 10 }}>{orders.reduce((s, o) => s + o.total_units, 0)}</td>
-                  <td className="text-right" style={{ paddingTop: 10 }}>{fmt(orders.reduce((s, o) => s + o.total_revenue, 0))}</td>
+                  <td className="text-right" style={{ paddingTop: 10 }}>{mn(orders.reduce((s, o) => s + o.total_units, 0))}</td>
+                  <td className="text-right" style={{ paddingTop: 10 }}>{mc(_fmt(orders.reduce((s, o) => s + o.total_revenue, 0)))}</td>
                   <td className="text-right" style={{ paddingTop: 10, color: COST_TYPE_COLOR.variable }}>
-                    {fmt(orders.reduce((s, o) => s + o.variable_3pl_cost, 0))}
+                    {mc(_fmt(orders.reduce((s, o) => s + o.variable_3pl_cost, 0)))}
                   </td>
                   <td></td>
                 </tr>
@@ -821,13 +824,15 @@ function EditableSelect({ value, onChange, options, color }) {
 }
 
 function InvoiceCostTypTotal({ invoiceId, lineItems, costType }) {
+  const { mc } = useDemoMask();
   const items = lineItems[invoiceId];
   if (!items) return <span className="text-muted" style={{ fontSize: 12 }}>—</span>;
   const total = items.filter(li => li.cost_type === costType).reduce((s, li) => s + parseFloat(li.amount_ex_gst || 0), 0);
-  return <span>{total > 0 ? fmt(total) : '—'}</span>;
+  return <span>{total > 0 ? mc(_fmt(total)) : '—'}</span>;
 }
 
 function LineItemsTable({ items }) {
+  const { mc, mn } = useDemoMask();
   if (!items.length) return <div className="text-muted" style={{ fontSize: 13 }}>No line items.</div>;
   const grouped = { inbound: [], outbound: [], other: [] };
   for (const li of items) (grouped[li.category] || grouped.other).push(li);
@@ -840,7 +845,7 @@ function LineItemsTable({ items }) {
         return (
           <div key={cat}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: CATEGORY_COLOR[cat], marginBottom: 6 }}>
-              {CATEGORY_LABEL[cat]} — {fmt(catTotal)}
+              {CATEGORY_LABEL[cat]} — {mc(_fmt(catTotal))}
             </div>
             <table style={{ fontSize: 12, width: '100%' }}>
               <tbody>
@@ -852,10 +857,10 @@ function LineItemsTable({ items }) {
                         {COST_TYPE_LABEL[li.cost_type] || li.cost_type}
                       </span>
                     </td>
-                    <td style={{ padding: '4px 0', textAlign: 'right', color: 'var(--text-muted)', width: 60 }}>{li.quantity ?? ''}</td>
-                    <td style={{ padding: '4px 0', textAlign: 'right', color: 'var(--text-muted)', width: 80 }}>{li.unit_rate ? fmt(li.unit_rate) : ''}</td>
-                    <td style={{ padding: '4px 0 4px 16px', textAlign: 'right', fontWeight: 500, width: 90 }}>{fmt(li.amount_ex_gst)}</td>
-                    <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', color: 'var(--text-muted)', width: 70 }}>+{fmt(li.gst)} GST</td>
+                    <td style={{ padding: '4px 0', textAlign: 'right', color: 'var(--text-muted)', width: 60 }}>{mn(li.quantity ?? '')}</td>
+                    <td style={{ padding: '4px 0', textAlign: 'right', color: 'var(--text-muted)', width: 80 }}>{li.unit_rate ? mc(_fmt(li.unit_rate)) : ''}</td>
+                    <td style={{ padding: '4px 0 4px 16px', textAlign: 'right', fontWeight: 500, width: 90 }}>{mc(_fmt(li.amount_ex_gst))}</td>
+                    <td style={{ padding: '4px 0 4px 8px', textAlign: 'right', color: 'var(--text-muted)', width: 70 }}>+{mc(_fmt(li.gst))} GST</td>
                   </tr>
                 ))}
               </tbody>

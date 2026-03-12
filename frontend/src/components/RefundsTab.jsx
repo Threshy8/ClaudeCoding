@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useDemoMask } from '../contexts/DemoModeContext';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -17,7 +18,7 @@ function fmtDate(d) {
   return `${day}/${m}/${y}`;
 }
 
-function fmt(n) {
+function _fmt(n) {
   if (n == null) return '—';
   return '$' + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
@@ -36,6 +37,7 @@ function RefundsView({ dateRange }) {
   const [search, setSearch]       = useState('');
   const [sortField, setSortField] = useState('refund_date');
   const [sortDir, setSortDir]     = useState('desc');
+  const { mc, mn } = useDemoMask();
 
   useEffect(() => {
     load();
@@ -110,10 +112,10 @@ function RefundsView({ dateRange }) {
       {/* Summary cards */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
         {[
-          { label: 'Total Refunds', value: totalRefunds, sub: 'transactions' },
-          { label: 'Units Returned', value: totalUnits, sub: 'items' },
-          { label: 'Refund Value', value: fmt(totalValue), sub: 'ex GST' },
-          { label: 'Avg Days to Refund', value: avgDaysToRefund != null ? `${avgDaysToRefund}d` : '—', sub: 'order → refund' },
+          { label: 'Total Refunds', value: mn(totalRefunds), sub: 'transactions' },
+          { label: 'Units Returned', value: mn(totalUnits), sub: 'items' },
+          { label: 'Refund Value', value: mc(_fmt(totalValue)), sub: 'ex GST' },
+          { label: 'Avg Days to Refund', value: avgDaysToRefund != null ? mn(`${avgDaysToRefund}d`) : '—', sub: 'order → refund' },
         ].map(c => (
           <div key={c.label} style={{
             background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -137,8 +139,8 @@ function RefundsView({ dateRange }) {
                 borderRadius: 8, padding: '10px 14px', fontSize: 13,
               }}>
                 <span style={{ fontWeight: 600 }}>{s.sku}</span>
-                <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>{s.units} units</span>
-                <span style={{ color: '#ef4444', marginLeft: 8 }}>{fmt(s.value)}</span>
+                <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>{mn(s.units)} units</span>
+                <span style={{ color: '#ef4444', marginLeft: 8 }}>{mc(_fmt(s.value))}</span>
               </div>
             ))}
           </div>
@@ -213,13 +215,13 @@ function RefundsView({ dateRange }) {
                     <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{fmtDate(r.refund_date)}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>
                       {days != null ? (
-                        <span style={{ fontSize: 12, fontWeight: 600, color: daysColor }}>{days}d</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: daysColor }}>{mn(`${days}d`)}</span>
                       ) : '—'}
                     </td>
                     <td style={{ padding: '8px 10px', fontWeight: 600 }}>{r.sku}</td>
                     <td style={{ padding: '8px 10px', color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.product_name}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{r.quantity_refunded}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', color: '#ef4444', fontWeight: 600 }}>{fmt(r.refund_subtotal)}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{mn(r.quantity_refunded)}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', color: '#ef4444', fontWeight: 600 }}>{mc(_fmt(r.refund_subtotal))}</td>
                   </tr>
                 );
               })}
@@ -227,8 +229,8 @@ function RefundsView({ dateRange }) {
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--bg-subtle)' }}>
                 <td colSpan={6} style={{ padding: '8px 10px', fontWeight: 700, fontSize: 12 }}>Total</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{totalUnits}</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#ef4444' }}>{fmt(totalValue)}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{mn(totalUnits)}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#ef4444' }}>{mc(_fmt(totalValue))}</td>
               </tr>
             </tfoot>
           </table>
@@ -243,6 +245,7 @@ function ResendsView({ dateRange }) {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
+  const { mc, mn, mname } = useDemoMask();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -273,10 +276,10 @@ function ResendsView({ dateRange }) {
       {/* Summary cards */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
         {[
-          { label: 'Total Resends', value: summary.total_resends, sub: 'orders' },
-          { label: 'Units Resent', value: summary.total_units_resent, sub: 'items' },
-          { label: 'Estimated COGS', value: fmt(summary.total_estimated_cogs), sub: 'cost of resends' },
-          { label: 'Avg Cost per Resend', value: fmt(avgCostPerResend), sub: 'per order' },
+          { label: 'Total Resends', value: mn(summary.total_resends), sub: 'orders' },
+          { label: 'Units Resent', value: mn(summary.total_units_resent), sub: 'items' },
+          { label: 'Estimated COGS', value: mc(_fmt(summary.total_estimated_cogs)), sub: 'cost of resends' },
+          { label: 'Avg Cost per Resend', value: mc(_fmt(avgCostPerResend)), sub: 'per order' },
         ].map(c => (
           <div key={c.label} style={{
             background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -318,13 +321,13 @@ function ResendsView({ dateRange }) {
                   <td style={{ padding: '8px 10px' }}>
                     <span className="mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>#{o.original_order_number}</span>
                   </td>
-                  <td style={{ padding: '8px 10px', fontSize: 13 }}>{o.customer_name}</td>
+                  <td style={{ padding: '8px 10px', fontSize: 13 }}>{mname(o.customer_name)}</td>
                   <td style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: 12 }}>{fmtDate(o.order_date)}</td>
                   <td style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: 12, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {o.line_items.map(li => `${li.sku} x${li.qty}`).join(', ')}
+                    {o.line_items.map(li => `${li.sku} x${mn(li.qty)}`).join(', ')}
                   </td>
-                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{o.total_units}</td>
-                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>{fmt(o.estimated_cogs)}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{mn(o.total_units)}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>{mc(_fmt(o.estimated_cogs))}</td>
                   <td style={{ padding: '8px 10px', fontSize: 12 }}>{locationLabel(o.fulfillment_location)}</td>
                 </tr>
               ))}
@@ -332,8 +335,8 @@ function ResendsView({ dateRange }) {
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--bg-subtle)' }}>
                 <td colSpan={5} style={{ padding: '8px 10px', fontWeight: 700, fontSize: 12 }}>Total ({orders.length} resends)</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{summary.total_units_resent}</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#ef4444' }}>{fmt(summary.total_estimated_cogs)}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{mn(summary.total_units_resent)}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#ef4444' }}>{mc(_fmt(summary.total_estimated_cogs))}</td>
                 <td></td>
               </tr>
             </tfoot>

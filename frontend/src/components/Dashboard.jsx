@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { getCogsSummary } from '../api';
 import { triggerLabel } from './DateRangePicker';
+import { useDemoMask } from '../contexts/DemoModeContext';
 
-function fmt(n) {
+function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 }).format(n || 0);
 }
 
@@ -10,6 +11,7 @@ export default function Dashboard({ dateRange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const { mc, mn, mp } = useDemoMask();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -34,22 +36,22 @@ export default function Dashboard({ dateRange }) {
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-label">Revenue</div>
-          <div className="kpi-value">{fmt(data.total_revenue)}</div>
+          <div className="kpi-value">{mc(_fmt(data.total_revenue))}</div>
           <div className="kpi-sub">{rangeLabel}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">True COGS</div>
-          <div className="kpi-value red">{fmt(data.total_cogs)}</div>
+          <div className="kpi-value red">{mc(_fmt(data.total_cogs))}</div>
           <div className="kpi-sub">Units sold × avg cost</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">Inventory Asset Value</div>
-          <div className="kpi-value accent">{fmt(data.total_inventory_value)}</div>
+          <div className="kpi-value accent">{mc(_fmt(data.total_inventory_value))}</div>
           <div className="kpi-sub">Stock on hand</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">Gross Margin</div>
-          <div className={`kpi-value ${marginClass}`}>{margin != null ? `${margin}%` : '—'}</div>
+          <div className={`kpi-value ${marginClass}`}>{margin != null ? mp(margin) : '—'}</div>
           <div className="kpi-sub">(Revenue − COGS) / Revenue</div>
         </div>
       </div>
@@ -82,15 +84,15 @@ export default function Dashboard({ dateRange }) {
                     <tr key={row.sku}>
                       <td><span className="mono">{row.sku}</span></td>
                       <td>{row.product_name}</td>
-                      <td className="text-right">{row.units_sold}</td>
-                      <td className="text-right">{fmt(row.avg_unit_cost)}</td>
-                      <td className="text-right">{fmt(row.revenue)}</td>
-                      <td className="text-right">{fmt(row.cogs)}</td>
+                      <td className="text-right">{mn(row.units_sold)}</td>
+                      <td className="text-right">{mc(_fmt(row.avg_unit_cost))}</td>
+                      <td className="text-right">{mc(_fmt(row.revenue))}</td>
+                      <td className="text-right">{mc(_fmt(row.cogs))}</td>
                       <td className="text-right">
-                        {m != null ? <span className={`badge ${mClass}`}>{m}%</span> : <span className="text-muted">—</span>}
+                        {m != null ? <span className={`badge ${mClass}`}>{mp(m)}</span> : <span className="text-muted">—</span>}
                       </td>
-                      <td className="text-right">{row.units_on_hand}</td>
-                      <td className="text-right">{fmt(row.inventory_value)}</td>
+                      <td className="text-right">{mn(row.units_on_hand)}</td>
+                      <td className="text-right">{mc(_fmt(row.inventory_value))}</td>
                     </tr>
                   );
                 })}

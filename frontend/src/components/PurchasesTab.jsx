@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useDemoMask } from '../contexts/DemoModeContext';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -17,7 +18,7 @@ async function apiFetchMultipart(path, body) {
   return res.json();
 }
 
-function fmt(n) {
+function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
 }
 
@@ -76,6 +77,7 @@ function PurchaseOrdersView() {
   const [saving, setSaving]           = useState(false);
   const [saveError, setSaveError]     = useState(null);
   const [deletingId, setDeletingId]   = useState(null);
+  const { mc, mn, mp } = useDemoMask();
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -124,7 +126,6 @@ function PurchaseOrdersView() {
       let mediaType;
 
       if (isPdf) {
-        // PDFs: read as-is
         base64 = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result.split(',')[1]);
@@ -133,7 +134,6 @@ function PurchaseOrdersView() {
         });
         mediaType = 'application/pdf';
       } else {
-        // Images: compress via canvas (max 1500px, JPEG q0.7)
         const imgUrl = URL.createObjectURL(file);
         const img = await new Promise((resolve, reject) => {
           const i = new Image();
@@ -192,7 +192,6 @@ function PurchaseOrdersView() {
     }
   };
 
-  // Invoice upload via file picker
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -200,7 +199,6 @@ function PurchaseOrdersView() {
     processFile(file);
   };
 
-  // Paste from clipboard (Cmd+V / Ctrl+V)
   const handlePaste = (e) => {
     if (uploading) return;
     const items = e.clipboardData?.items;
@@ -215,12 +213,10 @@ function PurchaseOrdersView() {
     }
   };
 
-  // Edit parsed row
   const updateParsedRow = (idx, field, value) => {
     setParsed(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
   };
 
-  // Save PO
   const handleSavePO = async () => {
     if (!parsed || parsed.length === 0) return;
     setSaving(true);
@@ -253,7 +249,6 @@ function PurchaseOrdersView() {
     }
   };
 
-  // Delete PO
   const handleDeletePO = async (id) => {
     if (!window.confirm('Delete this purchase order? This will trigger COGS recompute.')) return;
     setDeletingId(id);
@@ -279,7 +274,7 @@ function PurchaseOrdersView() {
             <div style={{ fontSize: 15, fontWeight: 700 }}>Purchase Orders</div>
             {!loading && (
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                {orders.length} POs · Total value: {fmt(totalValue)}
+                {orders.length} POs · Total value: {mc(_fmt(totalValue))}
               </div>
             )}
           </div>
@@ -309,7 +304,7 @@ function PurchaseOrdersView() {
                 <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
                   {parsedMeta.supplier} · {fmtDate(parsedMeta.invoice_date)}
                   {parsedMeta.invoice_reference && ` · Ref: ${parsedMeta.invoice_reference}`}
-                  {parsedMeta.shipping_cost > 0 && ` · Shipping: ${fmt(parsedMeta.shipping_cost)}`}
+                  {parsedMeta.shipping_cost > 0 && ` · Shipping: ${mc(_fmt(parsedMeta.shipping_cost))}`}
                 </div>
               )}
             </div>
@@ -394,12 +389,12 @@ function PurchaseOrdersView() {
                           <input type="number" step="0.01" value={row.unit_cost} onChange={e => updateParsedRow(i, 'unit_cost', e.target.value)}
                             style={{ width: '100%', padding: '4px 6px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 13, textAlign: 'right', background: 'var(--bg)' }} />
                           {hasFx && (
-                            <span style={{ fontSize: 10, color: '#b45309' }}>{sym}{Number(row.original_unit_cost).toFixed(2)}</span>
+                            <span style={{ fontSize: 10, color: '#b45309' }}>{mc(`${sym}${Number(row.original_unit_cost).toFixed(2)}`)}</span>
                           )}
                         </div>
                       </td>
                       <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
-                        {fmt((parseInt(row.quantity) || 0) * (parseFloat(row.unit_cost) || 0))}
+                        {mc(_fmt((parseInt(row.quantity) || 0) * (parseFloat(row.unit_cost) || 0)))}
                       </td>
                     </tr>
                   );
@@ -411,11 +406,11 @@ function PurchaseOrdersView() {
                     TOTAL ({parsed.length} lines)
                   </td>
                   <td style={{ padding: '8px', textAlign: 'right', fontWeight: 700 }}>
-                    {parsed.reduce((s, r) => s + (parseInt(r.quantity) || 0), 0)}
+                    {mn(parsed.reduce((s, r) => s + (parseInt(r.quantity) || 0), 0))}
                   </td>
                   <td></td>
                   <td style={{ padding: '8px', textAlign: 'right', fontWeight: 700 }}>
-                    {fmt(parsed.reduce((s, r) => s + (parseInt(r.quantity) || 0) * (parseFloat(r.unit_cost) || 0), 0))}
+                    {mc(_fmt(parsed.reduce((s, r) => s + (parseInt(r.quantity) || 0) * (parseFloat(r.unit_cost) || 0), 0)))}
                   </td>
                 </tr>
               </tfoot>
@@ -458,14 +453,14 @@ function PurchaseOrdersView() {
                     <td style={{ padding: '10px', color: 'var(--text-muted)', fontSize: 12 }}>{fmtDate(po.order_date)}</td>
                     <td style={{ padding: '10px' }}><StatusBadge status={po.status} /></td>
                     <td style={{ padding: '10px' }}><DestinationBadge destination={po.destination} /></td>
-                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: 600 }}>{fmt(po.total_value)}</td>
-                    <td style={{ padding: '10px', textAlign: 'right' }}>{po.total_units_ordered}</td>
+                    <td style={{ padding: '10px', textAlign: 'right', fontWeight: 600 }}>{mc(_fmt(po.total_value))}</td>
+                    <td style={{ padding: '10px', textAlign: 'right' }}>{mn(po.total_units_ordered)}</td>
                     <td style={{ padding: '10px', textAlign: 'right' }}>
                       <span style={{ color: po.total_units_remaining > 0 ? 'var(--text)' : 'var(--text-muted)' }}>
-                        {po.total_units_remaining}
+                        {mn(po.total_units_remaining)}
                       </span>
                       {po.consumption_pct > 0 && (
-                        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>({po.consumption_pct}% used)</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>({mp(po.consumption_pct)} used)</span>
                       )}
                     </td>
                     <td style={{ padding: '10px', display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -494,9 +489,9 @@ function PurchaseOrdersView() {
                                     <span className="mono">{line.sku}</span>
                                     <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>{line.product_name}</span>
                                     <span style={{ marginLeft: 12 }}>
-                                      {line.quantity_consumed || (line.quantity_ordered - line.quantity_remaining)}/{line.quantity_ordered} units used
+                                      {mn(line.quantity_consumed || (line.quantity_ordered - line.quantity_remaining))}/{mn(line.quantity_ordered)} units used
                                     </span>
-                                    <span style={{ marginLeft: 8 }}>@ {fmt(line.unit_cost)}</span>
+                                    <span style={{ marginLeft: 8 }}>@ {mc(_fmt(line.unit_cost))}</span>
                                   </div>
                                   {line.orders && line.orders.length > 0 ? (
                                     <table style={{ fontSize: 11, width: '100%', marginLeft: 12 }}>
@@ -512,10 +507,10 @@ function PurchaseOrdersView() {
                                           <tr key={oi}>
                                             <td style={{ padding: '3px 8px' }}>#{ord.order_number}</td>
                                             <td style={{ padding: '3px 8px', color: 'var(--text-muted)' }}>{fmtDate(ord.order_date)}</td>
-                                            <td style={{ padding: '3px 8px', textAlign: 'right' }}>{ord.quantity_sold}</td>
-                                            <td style={{ padding: '3px 8px', textAlign: 'right' }}>{fmt(ord.sale_price)}</td>
+                                            <td style={{ padding: '3px 8px', textAlign: 'right' }}>{mn(ord.quantity_sold)}</td>
+                                            <td style={{ padding: '3px 8px', textAlign: 'right' }}>{mc(_fmt(ord.sale_price))}</td>
                                             <td style={{ padding: '3px 8px', textAlign: 'right', color: (parseFloat(ord.gross_profit) || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                                              {fmt(ord.gross_profit)}
+                                              {mc(_fmt(ord.gross_profit))}
                                             </td>
                                           </tr>
                                         ))}
@@ -553,6 +548,7 @@ function GermanDropWalletView() {
   const [showForm, setShowForm]     = useState(false);
   const [form, setForm]             = useState({ topup_date: '', amount_aud: '', notes: '' });
   const [saving, setSaving]         = useState(false);
+  const { mc } = useDemoMask();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -607,9 +603,9 @@ function GermanDropWalletView() {
       {/* Balance card */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
         {[
-          { label: 'Total Topped Up', value: fmt(totalTopups), color: '' },
-          { label: 'Total GD Order Costs', value: fmt(totalSpent), color: '#ef4444' },
-          { label: 'Remaining Balance', value: fmt(balance), color: balance >= 0 ? '#059669' : '#ef4444' },
+          { label: 'Total Topped Up', value: mc(_fmt(totalTopups)), color: '' },
+          { label: 'Total GD Order Costs', value: mc(_fmt(totalSpent)), color: '#ef4444' },
+          { label: 'Remaining Balance', value: mc(_fmt(balance)), color: balance >= 0 ? '#059669' : '#ef4444' },
         ].map(c => (
           <div key={c.label} style={{
             background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -682,7 +678,7 @@ function GermanDropWalletView() {
               {topups.map(t => (
                 <tr key={t.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{fmtDate(t.topup_date)}</td>
-                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#059669' }}>{fmt(t.amount_aud)}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#059669' }}>{mc(_fmt(t.amount_aud))}</td>
                   <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{t.notes || '—'}</td>
                 </tr>
               ))}
@@ -718,7 +714,7 @@ function GermanDropWalletView() {
                   <td style={{ padding: '8px 10px' }}>
                     <span className="mono" style={{ fontSize: 12 }}>#{c.order_number || c.shopify_order_id}</span>
                   </td>
-                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>{fmt(c.shipping_cost)}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>{mc(_fmt(c.shipping_cost))}</td>
                   <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{c.notes || '—'}</td>
                   <td style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: 12 }}>{fmtDate(c.created_at?.split('T')[0])}</td>
                 </tr>
@@ -727,7 +723,7 @@ function GermanDropWalletView() {
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border)' }}>
                 <td style={{ padding: '8px 10px', fontWeight: 700, fontSize: 12 }}>Total</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#ef4444' }}>{fmt(totalSpent)}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#ef4444' }}>{mc(_fmt(totalSpent))}</td>
                 <td colSpan={2}></td>
               </tr>
             </tfoot>

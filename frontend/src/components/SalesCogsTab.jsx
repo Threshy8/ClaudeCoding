@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { getCogsSummary } from '../api';
 import { triggerLabel } from './DateRangePicker';
+import { useDemoMask } from '../contexts/DemoModeContext';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -10,7 +11,7 @@ async function apiFetch(path) {
   return res.json();
 }
 
-function fmt(n) {
+function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
 }
 
@@ -21,9 +22,10 @@ function fmtDate(d) {
 }
 
 function MarginBadge({ pct }) {
+  const { mp } = useDemoMask();
   if (pct == null) return <span className="text-muted">—</span>;
   const cls = pct >= 30 ? 'badge-green' : pct >= 10 ? 'badge-yellow' : 'badge-red';
-  return <span className={`badge ${cls}`}>{pct}%</span>;
+  return <span className={`badge ${cls}`}>{mp(pct)}</span>;
 }
 
 function CogsSourceBadge({ isFifo }) {
@@ -48,6 +50,7 @@ function CogsSourceBadge({ isFifo }) {
 function CostTooltip({ entry }) {
   const [show, setShow] = useState(false);
   const ref = useRef(null);
+  const { mc } = useDemoMask();
 
   if (!entry) return null;
 
@@ -59,7 +62,7 @@ function CostTooltip({ entry }) {
   return (
     <span ref={ref} style={{ position: 'relative', cursor: 'help' }}
       onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
-      {fmt(total)}
+      {mc(_fmt(total))}
       {show && (
         <div style={{
           position: 'absolute', bottom: '100%', right: 0, marginBottom: 6,
@@ -69,10 +72,10 @@ function CostTooltip({ entry }) {
           minWidth: 180,
         }}>
           <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--text)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Cost breakdown</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Purchase cost</span><span style={{ fontWeight: 600 }}>{fmt(purchase)}</span></div>
-          {shipping > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>GD shipping</span><span style={{ fontWeight: 600 }}>{fmt(shipping)}</span></div>}
-          {handling > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>SCC handling</span><span style={{ fontWeight: 600 }}>{fmt(handling)}</span></div>}
-          <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}><span>Total COGS</span><span>{fmt(total)}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Purchase cost</span><span style={{ fontWeight: 600 }}>{mc(_fmt(purchase))}</span></div>
+          {shipping > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>GD shipping</span><span style={{ fontWeight: 600 }}>{mc(_fmt(shipping))}</span></div>}
+          {handling > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>SCC handling</span><span style={{ fontWeight: 600 }}>{mc(_fmt(handling))}</span></div>}
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}><span>Total COGS</span><span>{mc(_fmt(total))}</span></div>
         </div>
       )}
     </span>
@@ -80,6 +83,7 @@ function CostTooltip({ entry }) {
 }
 
 function SkuView({ data, rangeLabel, fifoMap, isFifo }) {
+  const { mc, mn } = useDemoMask();
   const rows = (data.sku_breakdown || []).filter(r => !(r.sku || '').toLowerCase().includes('x-redo'));
   const sortedRows = [...rows].sort((a, b) => b.revenue - a.revenue);
   const totalUnits  = rows.reduce((s, r) => s + r.units_sold, 0);
@@ -121,19 +125,19 @@ function SkuView({ data, rangeLabel, fifoMap, isFifo }) {
                   <tr key={row.sku}>
                     <td><span className="mono">{row.sku}</span></td>
                     <td>{row.product_name}</td>
-                    <td className="text-right">{row.units_sold}</td>
-                    <td className="text-right">{fmt(avgCost)}</td>
-                    <td className="text-right">{fmt(row.revenue)}</td>
+                    <td className="text-right">{mn(row.units_sold)}</td>
+                    <td className="text-right">{mc(_fmt(avgCost))}</td>
+                    <td className="text-right">{mc(_fmt(row.revenue))}</td>
                     <td className="text-right">
                       {isFifo && fifoEntry
                         ? <CostTooltip entry={fifoEntry} />
-                        : fmt(cogs)
+                        : mc(_fmt(cogs))
                       }
                     </td>
-                    <td className="text-right" style={{ color: profit >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(profit)}</td>
+                    <td className="text-right" style={{ color: profit >= 0 ? 'var(--green)' : 'var(--red)' }}>{mc(_fmt(profit))}</td>
                     <td className="text-right"><MarginBadge pct={margin != null ? margin : row.gross_margin_pct} /></td>
-                    <td className="text-right">{row.units_on_hand}</td>
-                    <td className="text-right">{fmt(row.inventory_value)}</td>
+                    <td className="text-right">{mn(row.units_on_hand)}</td>
+                    <td className="text-right">{mc(_fmt(row.inventory_value))}</td>
                   </tr>
                 );
               })}
@@ -141,13 +145,13 @@ function SkuView({ data, rangeLabel, fifoMap, isFifo }) {
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
                 <td colSpan={2} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL</td>
-                <td className="text-right">{totalUnits}</td><td></td>
-                <td className="text-right">{fmt(totalRev)}</td>
-                <td className="text-right">{fmt(totalCogs)}</td>
-                <td className="text-right" style={{ color: totalProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(totalProfit)}</td>
+                <td className="text-right">{mn(totalUnits)}</td><td></td>
+                <td className="text-right">{mc(_fmt(totalRev))}</td>
+                <td className="text-right">{mc(_fmt(totalCogs))}</td>
+                <td className="text-right" style={{ color: totalProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>{mc(_fmt(totalProfit))}</td>
                 <td className="text-right"><MarginBadge pct={totalMargin} /></td>
-                <td className="text-right">{rows.reduce((s, r) => s + r.units_on_hand, 0)}</td>
-                <td className="text-right">{fmt(data.total_inventory_value)}</td>
+                <td className="text-right">{mn(rows.reduce((s, r) => s + r.units_on_hand, 0))}</td>
+                <td className="text-right">{mc(_fmt(data.total_inventory_value))}</td>
               </tr>
             </tfoot>
           </table>
@@ -162,6 +166,7 @@ function OrderView({ dateRange, rangeLabel }) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
   const [expandedId, setExpanded] = useState(null);
+  const { mc, mn, mname } = useDemoMask();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -210,15 +215,15 @@ function OrderView({ dateRange, rangeLabel }) {
                   <tr style={{ borderBottom: expandedId === o.shopify_order_id ? 'none' : '1px solid var(--border)' }}>
                     <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fmtDate(o.order_date)}</td>
                     <td><span className="mono" style={{ fontSize: 12 }}>#{o.order_number}</span></td>
-                    <td style={{ fontSize: 13 }}>{o.customer_name || '—'}</td>
+                    <td style={{ fontSize: 13 }}>{mname(o.customer_name)}</td>
                     <td style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {o.line_items.map(li => li.sku).join(', ')}
                     </td>
                     <td style={{ fontSize: 12 }}>{locationLabel(o.fulfillment_location)}</td>
-                    <td className="text-right">{o.total_units}</td>
-                    <td className="text-right">{fmt(o.total_revenue)}</td>
-                    <td className="text-right">{fmt(o.total_cogs)}</td>
-                    <td className="text-right" style={{ color: o.gross_profit >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(o.gross_profit)}</td>
+                    <td className="text-right">{mn(o.total_units)}</td>
+                    <td className="text-right">{mc(_fmt(o.total_revenue))}</td>
+                    <td className="text-right">{mc(_fmt(o.total_cogs))}</td>
+                    <td className="text-right" style={{ color: o.gross_profit >= 0 ? 'var(--green)' : 'var(--red)' }}>{mc(_fmt(o.gross_profit))}</td>
                     <td className="text-right"><MarginBadge pct={o.gross_margin_pct} /></td>
                     <td>
                       <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}
@@ -242,10 +247,10 @@ function OrderView({ dateRange, rangeLabel }) {
                                 <tr key={i}>
                                   <td style={{ padding: '4px 8px', fontWeight: 600 }}>{li.sku}</td>
                                   <td style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>{li.product_name}</td>
-                                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{li.qty}</td>
-                                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{fmt(li.revenue)}</td>
-                                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{fmt(li.cogs)}</td>
-                                  <td style={{ padding: '4px 8px', textAlign: 'right', color: (li.revenue-li.cogs)>=0?'var(--green)':'var(--red)' }}>{fmt(li.revenue-li.cogs)}</td>
+                                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{mn(li.qty)}</td>
+                                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{mc(_fmt(li.revenue))}</td>
+                                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{mc(_fmt(li.cogs))}</td>
+                                  <td style={{ padding: '4px 8px', textAlign: 'right', color: (li.revenue-li.cogs)>=0?'var(--green)':'var(--red)' }}>{mc(_fmt(li.revenue-li.cogs))}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -260,10 +265,10 @@ function OrderView({ dateRange, rangeLabel }) {
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
                 <td colSpan={5} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL ({orders.length} orders)</td>
-                <td className="text-right">{orders.reduce((s, o) => s + o.total_units, 0)}</td>
-                <td className="text-right">{fmt(totalRev)}</td>
-                <td className="text-right">{fmt(totalCogs)}</td>
-                <td className="text-right" style={{ color: totalProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(totalProfit)}</td>
+                <td className="text-right">{mn(orders.reduce((s, o) => s + o.total_units, 0))}</td>
+                <td className="text-right">{mc(_fmt(totalRev))}</td>
+                <td className="text-right">{mc(_fmt(totalCogs))}</td>
+                <td className="text-right" style={{ color: totalProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>{mc(_fmt(totalProfit))}</td>
                 <td className="text-right"><MarginBadge pct={totalMargin} /></td>
                 <td></td>
               </tr>
@@ -282,6 +287,7 @@ export default function SalesCogsTab({ dateRange }) {
   const [view, setView]       = useState('sku');
   const [fifoMap, setFifoMap] = useState({});
   const [isFifo, setIsFifo]   = useState(false);
+  const { mc, mp } = useDemoMask();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -343,10 +349,10 @@ export default function SalesCogsTab({ dateRange }) {
     <div>
       <div className="kpi-grid" style={{ marginBottom: 24 }}>
         {[
-          { label: 'Period Revenue', value: fmt(totalRev), cls: '' },
-          { label: 'Period COGS',    value: fmt(totalCogs), cls: 'red' },
-          { label: 'Gross Profit',   value: fmt(totalRev - totalCogs), cls: 'green' },
-          { label: 'Gross Margin',   value: `${margin}%`, cls: margin >= 30 ? 'green' : margin >= 10 ? 'accent' : 'red' },
+          { label: 'Period Revenue', value: mc(_fmt(totalRev)), cls: '' },
+          { label: 'Period COGS',    value: mc(_fmt(totalCogs)), cls: 'red' },
+          { label: 'Gross Profit',   value: mc(_fmt(totalRev - totalCogs)), cls: 'green' },
+          { label: 'Gross Margin',   value: mp(margin), cls: margin >= 30 ? 'green' : margin >= 10 ? 'accent' : 'red' },
         ].map(c => (
           <div key={c.label} className="kpi-card">
             <div className="kpi-label">{c.label}</div>

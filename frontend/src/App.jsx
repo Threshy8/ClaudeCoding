@@ -6,6 +6,7 @@ import JournalTab from './components/JournalTab';
 import FulfillmentTab from './components/FulfillmentTab';
 import RefundsTab from './components/RefundsTab';
 import DateRangePicker from './components/DateRangePicker';
+import { DemoModeContext } from './contexts/DemoModeContext';
 import { syncShopify } from './api';
 import './App.css';
 
@@ -85,6 +86,15 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const [syncError, setSyncError] = useState(null);
+  const [demoMode, setDemoMode] = useState(() => sessionStorage.getItem('wbc_demo') === '1');
+
+  const toggleDemo = useCallback(() => {
+    setDemoMode(prev => {
+      const next = !prev;
+      sessionStorage.setItem('wbc_demo', next ? '1' : '0');
+      return next;
+    });
+  }, []);
 
   if (!authed) return <PasswordGate onUnlock={() => setAuthed(true)} />;
 
@@ -121,6 +131,20 @@ export default function App() {
 
         <div className="header-right">
           <DateRangePicker value={dateRange} onChange={setDateRange} />
+
+          <button
+            onClick={toggleDemo}
+            style={{
+              padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', border: 'none', transition: 'all 0.15s ease',
+              background: demoMode ? '#d97706' : 'var(--bg-card)',
+              color: demoMode ? '#fff' : 'var(--text-muted)',
+              boxShadow: demoMode ? '0 2px 8px rgba(217,119,6,0.3)' : 'var(--shadow-xs)',
+            }}
+            title="Toggle demo mode — hide sensitive numbers and customer names"
+          >
+            {demoMode ? '👁‍🗨 Demo Mode' : '👁 Demo Mode'}
+          </button>
 
           <button
             className={`sync-btn ${syncing ? 'syncing' : ''}`}
@@ -165,14 +189,16 @@ export default function App() {
       </nav>
 
       {/* Tab content */}
-      <main className="main-content">
-        {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} />}
-        {activeTab === 'Stock Purchases' && <PurchasesTab />}
-        {activeTab === 'Sales & COGS'   && <SalesCogsTab  dateRange={dateRange} />}
-        {activeTab === '3PL Costs'      && <FulfillmentTab dateRange={dateRange} />}
-        {activeTab === 'Refunds'         && <RefundsTab    dateRange={dateRange} />}
-        {activeTab === 'Journal Export'  && <JournalTab    dateRange={dateRange} />}
-      </main>
+      <DemoModeContext.Provider value={demoMode}>
+        <main className="main-content">
+          {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} />}
+          {activeTab === 'Stock Purchases' && <PurchasesTab />}
+          {activeTab === 'Sales & COGS'   && <SalesCogsTab  dateRange={dateRange} />}
+          {activeTab === '3PL Costs'      && <FulfillmentTab dateRange={dateRange} />}
+          {activeTab === 'Refunds'         && <RefundsTab    dateRange={dateRange} />}
+          {activeTab === 'Journal Export'  && <JournalTab    dateRange={dateRange} />}
+        </main>
+      </DemoModeContext.Provider>
     </div>
   );
 }
