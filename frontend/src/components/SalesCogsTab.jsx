@@ -300,7 +300,55 @@ function OrderView({ dateRange, rangeLabel }) {
   );
 }
 
-export default function SalesCogsTab({ dateRange }) {
+function buildPresets() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const pad = (n) => String(n).padStart(2, '0');
+  const today = `${y}-${pad(m + 1)}-${pad(now.getDate())}`;
+  const thisMonthStart = `${y}-${pad(m + 1)}-01`;
+
+  // Monday of this week
+  const dow = (now.getDay() + 6) % 7; // 0=Mon
+  const mon = new Date(now);
+  mon.setDate(mon.getDate() - dow);
+  const weekStart = `${mon.getFullYear()}-${pad(mon.getMonth() + 1)}-${pad(mon.getDate())}`;
+
+  // Last month
+  const lm = m === 0 ? 11 : m - 1;
+  const ly = m === 0 ? y - 1 : y;
+  const lastMonthStart = `${ly}-${pad(lm + 1)}-01`;
+  const lastMonthEnd = new Date(y, m, 0);
+  const lastMonthEndStr = `${lastMonthEnd.getFullYear()}-${pad(lastMonthEnd.getMonth() + 1)}-${pad(lastMonthEnd.getDate())}`;
+
+  // Last 3 months
+  const l3m = new Date(y, m - 2, 1);
+  const last3Start = `${l3m.getFullYear()}-${pad(l3m.getMonth() + 1)}-01`;
+
+  return [
+    { label: 'Today',         start: today,          end: today },
+    { label: 'This Week',     start: weekStart,      end: today },
+    { label: 'This Month',    start: thisMonthStart, end: today },
+    { label: 'Last Month',    start: lastMonthStart, end: lastMonthEndStr },
+    { label: 'Last 3 Months', start: last3Start,     end: lastMonthEndStr },
+    { label: 'All Time',      start: '2025-01-01',   end: today },
+  ];
+}
+
+function defaultLocalRange() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  return {
+    start: `${y}-${pad(m + 1)}-01`,
+    end: `${y}-${pad(m + 1)}-${pad(now.getDate())}`,
+    label: 'This Month',
+  };
+}
+
+export default function SalesCogsTab({ dateRange: _globalRange }) {
+  const [localRange, setLocalRange] = useState(defaultLocalRange);
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
@@ -308,6 +356,9 @@ export default function SalesCogsTab({ dateRange }) {
   const [fifoMap, setFifoMap] = useState({});
   const [isFifo, setIsFifo]   = useState(false);
   const { mc, mp } = useDemoMask();
+
+  const dateRange = localRange;
+  const presets = buildPresets();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -322,7 +373,6 @@ export default function SalesCogsTab({ dateRange }) {
 
     fifoPromise.then(fifoData => {
       if (fifoData && fifoData.sku_breakdown && fifoData.sku_breakdown.length > 0) {
-        // FIFO data available — build fifoMap for CostTooltip and use FIFO data as primary
         const map = {};
         for (const row of fifoData.sku_breakdown) {
           if (row.cogs > 0 || row.purchase_cost > 0) {
@@ -340,14 +390,12 @@ export default function SalesCogsTab({ dateRange }) {
         setData(fifoData);
         setLoading(false);
       } else {
-        // No FIFO data — fall back to WAC summary
         getCogsSummary(dateRange)
           .then(setData)
           .catch(e => setError(e.message))
           .finally(() => setLoading(false));
       }
-    }).catch(e => {
-      // FIFO endpoint failed entirely — fall back to WAC
+    }).catch(() => {
       getCogsSummary(dateRange)
         .then(setData)
         .catch(err => setError(err.message))
@@ -355,18 +403,59 @@ export default function SalesCogsTab({ dateRange }) {
     });
   }, [dateRange]);
 
-  if (loading) return <div className="loading">Loading COGS data…</div>;
-  if (error)   return <div className="error-msg">{error}</div>;
-  if (!data)   return null;
+  const rangeLabel = dateRange.start === dateRange.end
+    ? fmtDate(dateRange.start)
+    : `${fmtDate(dateRange.start)} to ${fmtDate(dateRange.end)}`;
 
-  const rangeLabel = triggerLabel(dateRange);
-  const skuRows    = (data.sku_breakdown || []).filter(r => !(r.sku || '').toLowerCase().includes('x-redo'));
+  const handlePreset = (p) => setLocalRange({ start: p.start, end: p.end, label: p.label });
+  const handleStartChange = (e) => {
+    const v = e.target.value;
+    if (v) setLocalRange(prev => ({ start: v, end: prev.end < v ? v : prev.end, label: 'Custom' }));
+  };
+  const handleEndChange = (e) => {
+    const v = e.target.value;
+    if (v) setLocalRange(prev => ({ start: prev.start > v ? v : prev.start, end: v, label: 'Custom' }));
+  };
+
+  const skuRows    = data ? (data.sku_breakdown || []).filter(r => !(r.sku || '').toLowerCase().includes('x-redo')) : [];
   const totalRev   = skuRows.reduce((s, r) => s + r.revenue, 0);
   const totalCogs  = skuRows.reduce((s, r) => s + (isFifo && fifoMap[r.sku] ? fifoMap[r.sku].total_cogs : r.cogs), 0);
   const margin     = totalRev > 0 ? Math.round((totalRev - totalCogs) / totalRev * 100) : 0;
 
+  const inputStyle = {
+    padding: '6px 10px', borderRadius: 6, fontSize: 13, fontWeight: 500,
+    border: '1px solid var(--border)', background: 'var(--bg-card)',
+    color: 'var(--text)', fontFamily: 'inherit', outline: 'none',
+  };
+
   return (
     <div>
+      {/* Date range picker */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 20,
+        padding: '12px 16px', background: 'var(--bg-card)', border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+      }}>
+        <input type="date" value={dateRange.start} onChange={handleStartChange} style={inputStyle} />
+        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>to</span>
+        <input type="date" value={dateRange.end} onChange={handleEndChange} style={inputStyle} />
+        <span style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 4px' }} />
+        {presets.map(p => (
+          <button key={p.label} onClick={() => handlePreset(p)} style={{
+            padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            border: '1px solid',
+            borderColor: dateRange.label === p.label ? 'var(--accent)' : 'var(--border)',
+            background: dateRange.label === p.label ? 'var(--accent-dim)' : 'transparent',
+            color: dateRange.label === p.label ? 'var(--accent-deep)' : 'var(--text-muted)',
+            transition: 'all 0.15s',
+          }}>{p.label}</button>
+        ))}
+      </div>
+
+      {loading ? <div className="loading">Loading COGS data…</div>
+       : error ? <div className="error-msg">{error}</div>
+       : !data ? null
+       : <>
       <div className="kpi-grid" style={{ marginBottom: 24 }}>
         {[
           { label: 'Period Revenue', value: mc(_fmt(totalRev)), cls: '' },
@@ -406,6 +495,7 @@ export default function SalesCogsTab({ dateRange }) {
           : 'Unit cost = weighted average of all purchases. COGS = units sold × average unit cost. Inventory value = units on hand × average unit cost.'
         }
       </div>
+      </>}
     </div>
   );
 }
