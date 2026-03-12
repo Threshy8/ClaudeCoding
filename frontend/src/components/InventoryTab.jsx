@@ -7,10 +7,7 @@ function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
 }
 
-const LASER_SKUS = ['BLK1VYG', 'BLK2VYG', 'BLK3VYG'];
-
-function getLocation(sku) {
-  if (LASER_SKUS.includes(sku)) return 'Laser Engraving';
+function getLocation() {
   return 'SCC';
 }
 
