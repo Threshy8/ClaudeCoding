@@ -171,6 +171,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .eq('sku', 'x-redo');
 
   const redoFees = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+  const redoUnits = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0), 0);
 
   // --- Totals ---
   const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
@@ -187,6 +188,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     total_inventory_value: Math.round(totalInventoryValue * 100) / 100,
     gross_margin_pct: Math.round(overallMargin * 100) / 100,
     redo_fees: Math.round(redoFees * 100) / 100,
+    redo_units: redoUnits,
     sku_breakdown: skuBreakdown,
   };
 }
@@ -576,6 +578,7 @@ router.get('/entries/by-sku', async (req, res) => {
       .eq('sku', 'x-redo');
 
     const redoFees = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+    const redoUnits = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0), 0);
 
     const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
     const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
@@ -588,6 +591,7 @@ router.get('/entries/by-sku', async (req, res) => {
       total_inventory_value: Math.round(totalInvValue * 100) / 100,
       gross_margin_pct: totalRevenue > 0 ? Math.round((totalRevenue - totalCogs) / totalRevenue * 10000) / 100 : 0,
       redo_fees: Math.round(redoFees * 100) / 100,
+      redo_units: redoUnits,
       sku_breakdown: skuBreakdown,
     });
   } catch (err) {

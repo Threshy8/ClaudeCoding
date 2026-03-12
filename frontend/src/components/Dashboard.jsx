@@ -159,16 +159,16 @@ export default function Dashboard({ dateRange }) {
                   );
                 })}
                 {redoFees > 0 && (
-                  <tr key="x-redo" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  <tr key="x-redo">
                     <td><span className="mono">x-redo</span></td>
                     <td>Redo Returns Fee</td>
-                    <td className="text-right">—</td>
-                    <td className="text-right">—</td>
-                    <td className="text-right" style={{ color: 'var(--text-primary)' }}>{mc(_fmt(redoFees))}</td>
-                    <td className="text-right">—</td>
-                    <td className="text-right">—</td>
-                    <td className="text-right">—</td>
-                    <td className="text-right">—</td>
+                    <td className="text-right">{mn(skuData.redo_units || 0)}</td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right">{mc(_fmt(redoFees))}</td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
                   </tr>
                 )}
               </tbody>
