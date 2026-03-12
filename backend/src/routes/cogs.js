@@ -466,12 +466,12 @@ router.get('/entries/by-sku', async (req, res) => {
     // Get FIFO entries for the period
     const { data: entries, error: eErr } = await supabase
       .from('cogs_entries')
-      .select('sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, gross_profit')
+      .select('sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, gross_profit, order_date')
       .gte('order_date', start_date)
       .lte('order_date', end_date)
       .eq('store', store);
     if (eErr) return res.status(500).json({ error: eErr.message });
-    if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0 });
+    if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0 });
 
     // Group by SKU
     const skuMap = {};
@@ -562,12 +562,16 @@ router.get('/entries/by-sku', async (req, res) => {
       }
     }
 
-    // Redo fees (x-redo line items in the period)
+    // Redo fees — clamp to the date range that cogs_entries actually covers,
+    // since the FIFO engine may not have processed older sales yet
+    const effectiveStart = entries.reduce((min, e) => e.order_date < min ? e.order_date : min, entries[0].order_date);
+    const effectiveEnd = entries.reduce((max, e) => e.order_date > max ? e.order_date : max, entries[0].order_date);
+
     const { data: redoRows } = await supabase
       .from('shopify_sales')
       .select('quantity_sold, sale_price')
-      .gte('order_date', start_date)
-      .lte('order_date', end_date)
+      .gte('order_date', effectiveStart)
+      .lte('order_date', effectiveEnd)
       .eq('store', store)
       .eq('sku', 'x-redo');
 
