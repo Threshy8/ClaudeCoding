@@ -166,15 +166,32 @@ function OrderView({ dateRange, rangeLabel }) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
   const [expandedId, setExpanded] = useState(null);
+  const [orderIsFifo, setOrderIsFifo] = useState(false);
   const { mc, mn, mname } = useDemoMask();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
     setLoading(true);
     setError(null);
-    apiFetch(`/api/cogs/orders?start_date=${dateRange.start}&end_date=${dateRange.end}&store=au`)
-      .then(setOrders)
-      .catch(e => setError(e.message))
+    setOrderIsFifo(false);
+    // Try FIFO endpoint first
+    apiFetch(`/api/cogs/entries/by-order?start_date=${dateRange.start}&end_date=${dateRange.end}&store=au`)
+      .then(data => {
+        if (data && data.length > 0) {
+          setOrders(data);
+          setOrderIsFifo(true);
+        } else {
+          // Fall back to WAC
+          return apiFetch(`/api/cogs/orders?start_date=${dateRange.start}&end_date=${dateRange.end}&store=au`)
+            .then(setOrders);
+        }
+      })
+      .catch(() => {
+        // FIFO failed — fall back to WAC
+        return apiFetch(`/api/cogs/orders?start_date=${dateRange.start}&end_date=${dateRange.end}&store=au`)
+          .then(setOrders)
+          .catch(e => setError(e.message));
+      })
       .finally(() => setLoading(false));
   }, [dateRange]);
 
@@ -195,7 +212,10 @@ function OrderView({ dateRange, rangeLabel }) {
 
   return (
     <div className="card">
-      <div className="card-title">Sales & COGS by Order — {rangeLabel}</div>
+      <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        Sales & COGS by Order — {rangeLabel}
+        <CogsSourceBadge isFifo={orderIsFifo} />
+      </div>
       {orders.length === 0 ? (
         <div className="empty">No orders for this period.</div>
       ) : (
@@ -296,43 +316,43 @@ export default function SalesCogsTab({ dateRange }) {
     setIsFifo(false);
     setFifoMap({});
 
-    const summaryPromise = getCogsSummary(dateRange);
-    const fifoPromise = apiFetch(`/api/cogs/entries?start_date=${dateRange.start}&end_date=${dateRange.end}&store=au`)
+    // Try FIFO endpoint first, fall back to WAC summary
+    const fifoPromise = apiFetch(`/api/cogs/entries/by-sku?start_date=${dateRange.start}&end_date=${dateRange.end}&store=au`)
       .catch(() => null);
 
-    Promise.all([summaryPromise, fifoPromise])
-      .then(([summaryData, fifoData]) => {
-        setData(summaryData);
-
-        // Build FIFO map by SKU if entries exist
-        if (fifoData && Array.isArray(fifoData) && fifoData.length > 0) {
-          const map = {};
-          for (const e of fifoData) {
-            if (!map[e.sku]) {
-              map[e.sku] = { total_cogs: 0, units_sold: 0, purchase_cost: 0, gd_shipping: 0, scc_handling: 0 };
-            }
-            const qty = e.quantity_sold || 0;
-            const unitCost = parseFloat(e.unit_cost) || 0;
-            const gdShip = parseFloat(e.gd_shipping_per_unit) || 0;
-            const sccHandle = parseFloat(e.scc_handling_per_unit) || 0;
-            map[e.sku].units_sold += qty;
-            map[e.sku].purchase_cost += qty * unitCost;
-            map[e.sku].gd_shipping += qty * gdShip;
-            map[e.sku].scc_handling += qty * sccHandle;
-            map[e.sku].total_cogs += qty * (unitCost + gdShip + sccHandle);
+    fifoPromise.then(fifoData => {
+      if (fifoData && fifoData.sku_breakdown && fifoData.sku_breakdown.length > 0) {
+        // FIFO data available — build fifoMap for CostTooltip and use FIFO data as primary
+        const map = {};
+        for (const row of fifoData.sku_breakdown) {
+          if (row.cogs > 0 || row.purchase_cost > 0) {
+            map[row.sku] = {
+              total_cogs: row.cogs,
+              units_sold: row.units_sold,
+              purchase_cost: row.purchase_cost || 0,
+              gd_shipping: row.gd_shipping || 0,
+              scc_handling: row.scc_handling || 0,
+            };
           }
-          // Round all values
-          for (const sku of Object.keys(map)) {
-            for (const k of Object.keys(map[sku])) {
-              map[sku][k] = Math.round(map[sku][k] * 100) / 100;
-            }
-          }
-          setFifoMap(map);
-          setIsFifo(true);
         }
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+        setFifoMap(map);
+        setIsFifo(true);
+        setData(fifoData);
+        setLoading(false);
+      } else {
+        // No FIFO data — fall back to WAC summary
+        getCogsSummary(dateRange)
+          .then(setData)
+          .catch(e => setError(e.message))
+          .finally(() => setLoading(false));
+      }
+    }).catch(e => {
+      // FIFO endpoint failed entirely — fall back to WAC
+      getCogsSummary(dateRange)
+        .then(setData)
+        .catch(err => setError(err.message))
+        .finally(() => setLoading(false));
+    });
   }, [dateRange]);
 
   if (loading) return <div className="loading">Loading COGS data…</div>;

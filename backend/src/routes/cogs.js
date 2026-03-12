@@ -443,5 +443,209 @@ router.get('/resends', async (req, res) => {
   res.json({ summary, orders });
 });
 
+// ── GET /api/cogs/entries/by-sku ─────────────────────────────────────────────
+// Returns FIFO-based per-SKU breakdown from cogs_entries, same shape as /summary
+router.get('/entries/by-sku', async (req, res) => {
+  const { start_date, end_date, store = 'au' } = req.query;
+  if (!start_date || !end_date) return res.status(400).json({ error: 'start_date and end_date required' });
+
+  try {
+    // Get FIFO entries for the period
+    const { data: entries, error: eErr } = await supabase
+      .from('cogs_entries')
+      .select('sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, gross_profit')
+      .gte('order_date', start_date)
+      .lte('order_date', end_date)
+      .eq('store', store);
+    if (eErr) return res.status(500).json({ error: eErr.message });
+    if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0 });
+
+    // Group by SKU
+    const skuMap = {};
+    for (const e of entries) {
+      if (!skuMap[e.sku]) {
+        skuMap[e.sku] = { sku: e.sku, product_name: e.product_name, units_sold: 0, revenue: 0, cogs: 0, purchase_cost: 0, gd_shipping: 0, scc_handling: 0 };
+      }
+      const qty = e.quantity_sold || 0;
+      skuMap[e.sku].units_sold += qty;
+      skuMap[e.sku].revenue += qty * parseFloat(e.sale_price || 0);
+      skuMap[e.sku].cogs += qty * parseFloat(e.total_unit_cogs || 0);
+      skuMap[e.sku].purchase_cost += qty * parseFloat(e.unit_purchase_cost || 0);
+      skuMap[e.sku].gd_shipping += qty * parseFloat(e.unit_gd_shipping || 0);
+      skuMap[e.sku].scc_handling += qty * parseFloat(e.unit_scc_handling || 0);
+    }
+
+    // Get inventory on-hand from WAC data (purchases − all-time net sold)
+    const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
+    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold');
+    const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded');
+
+    const purchaseMap = {};
+    for (const p of (allPurchases || [])) {
+      if (!purchaseMap[p.sku]) purchaseMap[p.sku] = { totalQty: 0, totalCost: 0 };
+      purchaseMap[p.sku].totalQty += p.quantity;
+      purchaseMap[p.sku].totalCost += p.quantity * parseFloat(p.unit_cost);
+    }
+    const allTimeSold = {};
+    for (const s of (allSales || [])) allTimeSold[s.sku] = (allTimeSold[s.sku] || 0) + s.quantity_sold;
+    for (const r of (allRefunds || [])) allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_refunded;
+
+    // Get period refunds (by refund_date) to compute net units/revenue
+    const { data: periodRefunds } = await supabase
+      .from('shopify_refunds')
+      .select('sku, quantity_refunded, refund_subtotal')
+      .gte('refund_date', start_date)
+      .lte('refund_date', end_date)
+      .eq('store', store);
+
+    const refundMap = {};
+    for (const r of (periodRefunds || [])) {
+      if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotal: 0 };
+      refundMap[r.sku].qty += r.quantity_refunded;
+      refundMap[r.sku].subtotal += parseFloat(r.refund_subtotal || 0);
+    }
+
+    const skuBreakdown = Object.values(skuMap).map(s => {
+      const refund = refundMap[s.sku] || { qty: 0, subtotal: 0 };
+      const netUnits = s.units_sold - refund.qty;
+      const netRevenue = s.revenue - refund.subtotal;
+      // Scale COGS proportionally for net units
+      const avgUnitCogs = s.units_sold > 0 ? s.cogs / s.units_sold : 0;
+      const netCogs = netUnits * avgUnitCogs;
+      const margin = netRevenue > 0 ? ((netRevenue - netCogs) / netRevenue) * 100 : 0;
+      const pm = purchaseMap[s.sku] || { totalQty: 0, totalCost: 0 };
+      const avgCost = pm.totalQty > 0 ? pm.totalCost / pm.totalQty : 0;
+      const onHand = Math.max(0, pm.totalQty - (allTimeSold[s.sku] || 0));
+      return {
+        sku: s.sku,
+        product_name: s.product_name,
+        units_sold: netUnits,
+        avg_unit_cost: s.units_sold > 0 ? Math.round(s.cogs / s.units_sold * 100) / 100 : 0,
+        revenue: Math.round(netRevenue * 100) / 100,
+        cogs: Math.round(netCogs * 100) / 100,
+        gross_margin_pct: Math.round(margin * 100) / 100,
+        units_on_hand: onHand,
+        inventory_value: Math.round(onHand * avgCost * 100) / 100,
+        // FIFO cost breakdown
+        purchase_cost: Math.round(s.purchase_cost * 100) / 100,
+        gd_shipping: Math.round(s.gd_shipping * 100) / 100,
+        scc_handling: Math.round(s.scc_handling * 100) / 100,
+      };
+    });
+
+    // Also add SKUs with inventory but no period sales
+    for (const [sku, pm] of Object.entries(purchaseMap)) {
+      if (skuMap[sku]) continue;
+      const avgCost = pm.totalQty > 0 ? pm.totalCost / pm.totalQty : 0;
+      const onHand = Math.max(0, pm.totalQty - (allTimeSold[sku] || 0));
+      if (onHand > 0) {
+        skuBreakdown.push({
+          sku, product_name: (allPurchases || []).find(p => p.sku === sku)?.product_name || 'Unknown',
+          units_sold: 0, avg_unit_cost: Math.round(avgCost * 100) / 100, revenue: 0, cogs: 0,
+          gross_margin_pct: null, units_on_hand: onHand,
+          inventory_value: Math.round(onHand * avgCost * 100) / 100,
+          purchase_cost: 0, gd_shipping: 0, scc_handling: 0,
+        });
+      }
+    }
+
+    const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
+    const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
+    const totalInvValue = skuBreakdown.reduce((s, r) => s + r.inventory_value, 0);
+
+    res.json({
+      period: `${start_date} – ${end_date}`,
+      total_revenue: Math.round(totalRevenue * 100) / 100,
+      total_cogs: Math.round(totalCogs * 100) / 100,
+      total_inventory_value: Math.round(totalInvValue * 100) / 100,
+      gross_margin_pct: totalRevenue > 0 ? Math.round((totalRevenue - totalCogs) / totalRevenue * 10000) / 100 : 0,
+      sku_breakdown: skuBreakdown,
+    });
+  } catch (err) {
+    console.error('FIFO by-sku error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/cogs/entries/by-order ──────────────────────────────────────────
+// Returns FIFO-based per-order breakdown from cogs_entries, same shape as /orders
+router.get('/entries/by-order', async (req, res) => {
+  const { start_date, end_date, store = 'au' } = req.query;
+  if (!start_date || !end_date) return res.status(400).json({ error: 'start_date and end_date required' });
+
+  try {
+    const { data: entries, error: eErr } = await supabase
+      .from('cogs_entries')
+      .select('shopify_order_id, order_number, order_date, sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, gross_profit, fulfillment_location')
+      .gte('order_date', start_date)
+      .lte('order_date', end_date)
+      .eq('store', store)
+      .order('order_date', { ascending: false });
+    if (eErr) return res.status(500).json({ error: eErr.message });
+    if (!entries || entries.length === 0) return res.json([]);
+
+    // Get customer names from shopify_sales
+    const orderIds = [...new Set(entries.map(e => e.shopify_order_id))];
+    const { data: salesInfo } = await supabase
+      .from('shopify_sales')
+      .select('shopify_order_id, customer_name')
+      .in('shopify_order_id', orderIds);
+    const customerMap = {};
+    for (const s of (salesInfo || [])) {
+      if (s.customer_name) customerMap[s.shopify_order_id] = s.customer_name;
+    }
+
+    // Group by order
+    const orderMap = {};
+    for (const e of entries) {
+      if ((e.sku || '').toLowerCase().includes('x-redo')) continue;
+      if (!orderMap[e.shopify_order_id]) {
+        orderMap[e.shopify_order_id] = {
+          shopify_order_id: e.shopify_order_id,
+          order_number: e.order_number || e.shopify_order_id,
+          customer_name: customerMap[e.shopify_order_id] || '—',
+          order_date: e.order_date,
+          fulfillment_location: e.fulfillment_location || 'Unknown',
+          line_items: [],
+          total_units: 0,
+          total_revenue: 0,
+          total_cogs: 0,
+        };
+      }
+      const o = orderMap[e.shopify_order_id];
+      const qty = e.quantity_sold || 0;
+      const revenue = qty * parseFloat(e.sale_price || 0);
+      const cogs = qty * parseFloat(e.total_unit_cogs || 0);
+      o.line_items.push({
+        sku: e.sku,
+        product_name: e.product_name,
+        qty,
+        revenue: Math.round(revenue * 100) / 100,
+        cogs: Math.round(cogs * 100) / 100,
+        unit_purchase_cost: parseFloat(e.unit_purchase_cost || 0),
+        unit_gd_shipping: parseFloat(e.unit_gd_shipping || 0),
+        unit_scc_handling: parseFloat(e.unit_scc_handling || 0),
+      });
+      o.total_units += qty;
+      o.total_revenue += revenue;
+      o.total_cogs += cogs;
+    }
+
+    const orders = Object.values(orderMap).map(o => ({
+      ...o,
+      total_revenue: Math.round(o.total_revenue * 100) / 100,
+      total_cogs: Math.round(o.total_cogs * 100) / 100,
+      gross_profit: Math.round((o.total_revenue - o.total_cogs) * 100) / 100,
+      gross_margin_pct: o.total_revenue > 0 ? Math.round((o.total_revenue - o.total_cogs) / o.total_revenue * 100) : null,
+    }));
+
+    orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
+    res.json(orders);
+  } catch (err) {
+    console.error('FIFO by-order error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.buildCogsData = buildCogsData;
