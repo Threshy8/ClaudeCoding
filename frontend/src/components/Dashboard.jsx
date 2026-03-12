@@ -158,13 +158,26 @@ export default function Dashboard({ dateRange }) {
                     </tr>
                   );
                 })}
+                {redoFees > 0 && (
+                  <tr key="x-redo" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                    <td><span className="mono">x-redo</span></td>
+                    <td>Redo Returns Fee</td>
+                    <td className="text-right">—</td>
+                    <td className="text-right">—</td>
+                    <td className="text-right" style={{ color: 'var(--text-primary)' }}>{mc(_fmt(redoFees))}</td>
+                    <td className="text-right">—</td>
+                    <td className="text-right">—</td>
+                    <td className="text-right">—</td>
+                    <td className="text-right">—</td>
+                  </tr>
+                )}
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
                   <td colSpan={2} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL</td>
                   <td className="text-right">{mn(rows.reduce((s, r) => s + r.units_sold, 0))}</td>
                   <td></td>
-                  <td className="text-right">{mc(_fmt(totalRevenue))}</td>
+                  <td className="text-right">{mc(_fmt(totalCollected))}</td>
                   <td className="text-right">{mc(_fmt(totalCogs))}</td>
                   <td className="text-right">
                     {margin != null
