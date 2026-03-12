@@ -6,12 +6,13 @@ import JournalTab from './components/JournalTab';
 import FulfillmentTab from './components/FulfillmentTab';
 import RefundsTab from './components/RefundsTab';
 import InventoryTab from './components/InventoryTab';
+import ForecastTab from './components/ForecastTab';
 import DateRangePicker from './components/DateRangePicker';
 import { DemoModeContext } from './contexts/DemoModeContext';
 import { syncShopify } from './api';
 import './App.css';
 
-const TABS = ['Dashboard', 'Inventory', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Refunds', 'Journal Export'];
+const TABS = ['Dashboard', 'Inventory', 'Forecast', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Refunds', 'Journal Export'];
 const APP_PASSWORD = process.env.REACT_APP_PASSWORD || 'watchbox2024';
 
 function defaultRange() {
@@ -194,6 +195,7 @@ export default function App() {
         <main className="main-content">
           {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} />}
           {activeTab === 'Inventory'       && <InventoryTab />}
+          {activeTab === 'Forecast'        && <ForecastTab />}
           {activeTab === 'Stock Purchases' && <PurchasesTab />}
           {activeTab === 'Sales & COGS'   && <SalesCogsTab  dateRange={dateRange} />}
           {activeTab === '3PL Costs'      && <FulfillmentTab dateRange={dateRange} />}

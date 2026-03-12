@@ -736,5 +736,272 @@ router.get('/inventory/summary', async (req, res) => {
   }
 });
 
+// ── GET /api/forecast/revenue ────────────────────────────────────────────────
+// Daily revenue for last 90 days + 30-day forward projection
+router.get('/forecast/revenue', async (req, res) => {
+  const store = req.query.store || 'au';
+
+  try {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const ninetyAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const { data: sales, error: sErr } = await supabase
+      .from('shopify_sales')
+      .select('order_date, quantity_sold, sale_price')
+      .gte('order_date', ninetyAgo)
+      .lte('order_date', today)
+      .eq('store', store);
+    if (sErr) return res.status(500).json({ error: sErr.message });
+
+    // Build daily revenue map
+    const dailyMap = {};
+    for (const s of (sales || [])) {
+      const d = s.order_date;
+      dailyMap[d] = (dailyMap[d] || 0) + (s.quantity_sold || 0) * parseFloat(s.sale_price || 0);
+    }
+
+    // Fill all 90 days (including zero-revenue days)
+    const historical = [];
+    for (let i = 89; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      historical.push({ date: d, revenue: Math.round((dailyMap[d] || 0) * 100) / 100 });
+    }
+
+    // 7-day rolling average
+    for (let i = 0; i < historical.length; i++) {
+      const windowStart = Math.max(0, i - 6);
+      const window = historical.slice(windowStart, i + 1);
+      historical[i].rolling_7d = Math.round(window.reduce((s, r) => s + r.revenue, 0) / window.length * 100) / 100;
+    }
+
+    // Projection: average of last 30 days
+    const last30 = historical.slice(-30);
+    const avgDaily = last30.reduce((s, r) => s + r.revenue, 0) / 30;
+
+    const forecast = [];
+    for (let i = 1; i <= 30; i++) {
+      const d = new Date(now.getTime() + i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      forecast.push({
+        date: d,
+        projected: Math.round(avgDaily * 100) / 100,
+        low: Math.round(avgDaily * 0.7 * 100) / 100,
+        high: Math.round(avgDaily * 1.3 * 100) / 100,
+      });
+    }
+
+    // Days remaining in current month
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const dayOfMonth = now.getDate();
+    const daysRemaining = daysInMonth - dayOfMonth;
+
+    // Revenue so far this month
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const thisMonthRev = historical.filter(h => h.date >= monthStart).reduce((s, r) => s + r.revenue, 0);
+
+    // Next month projection
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const daysInNextMonth = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0).getDate();
+
+    res.json({
+      historical,
+      forecast,
+      summary: {
+        avg_daily: Math.round(avgDaily * 100) / 100,
+        projected_this_month: Math.round((thisMonthRev + daysRemaining * avgDaily) * 100) / 100,
+        projected_next_month: Math.round(avgDaily * daysInNextMonth * 100) / 100,
+      },
+    });
+  } catch (err) {
+    console.error('Forecast revenue error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/forecast/stockout ──────────────────────────────────────────────
+// Stockout risk per SKU based on sales velocity
+router.get('/forecast/stockout', async (req, res) => {
+  const store = req.query.store || 'au';
+
+  try {
+    // Get current stock from purchase_order_lines
+    const { data: lots, error: lotsErr } = await supabase
+      .from('purchase_order_lines')
+      .select('sku, product_name, quantity_remaining, po_number')
+      .gt('quantity_remaining', 0);
+    if (lotsErr) return res.status(500).json({ error: lotsErr.message });
+
+    // Group by SKU
+    const skuStock = {};
+    for (const lot of (lots || [])) {
+      if (!skuStock[lot.sku]) {
+        skuStock[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, po_numbers: new Set() };
+      }
+      skuStock[lot.sku].quantity_remaining += lot.quantity_remaining;
+      if (lot.po_number) skuStock[lot.sku].po_numbers.add(lot.po_number);
+    }
+
+    // Get sales last 30 days for velocity
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const thirtyAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const { data: recentSales, error: rsErr } = await supabase
+      .from('shopify_sales')
+      .select('sku, quantity_sold')
+      .gte('order_date', thirtyAgo)
+      .lte('order_date', today)
+      .eq('store', store);
+    if (rsErr) return res.status(500).json({ error: rsErr.message });
+
+    const soldMap = {};
+    for (const s of (recentSales || [])) {
+      soldMap[s.sku] = (soldMap[s.sku] || 0) + (s.quantity_sold || 0);
+    }
+
+    const LEAD_TIME_DAYS = 60;
+    const results = [];
+
+    for (const [sku, stock] of Object.entries(skuStock)) {
+      const unitsSold30d = soldMap[sku] || 0;
+      const dailyVelocity = unitsSold30d / 30;
+      let daysUntilStockout = null;
+      let reorderByDate = null;
+      let status = 'no_movement';
+
+      if (dailyVelocity > 0) {
+        daysUntilStockout = Math.round(stock.quantity_remaining / dailyVelocity);
+        const reorderDate = new Date(now.getTime() + Math.max(0, daysUntilStockout - LEAD_TIME_DAYS) * 24 * 60 * 60 * 1000);
+        reorderByDate = reorderDate.toISOString().slice(0, 10);
+
+        if (daysUntilStockout < 30) status = 'danger';
+        else if (daysUntilStockout < 90) status = 'order_now';
+        else if (daysUntilStockout < 120) status = 'warning';
+        else status = 'ok';
+      }
+
+      results.push({
+        sku,
+        product_name: stock.product_name,
+        quantity_remaining: stock.quantity_remaining,
+        units_sold_30d: unitsSold30d,
+        daily_velocity: Math.round(dailyVelocity * 100) / 100,
+        days_until_stockout: daysUntilStockout,
+        reorder_by_date: reorderByDate,
+        status,
+        po_numbers: [...stock.po_numbers],
+      });
+    }
+
+    // Sort: danger first, then by days_until_stockout ascending (nulls last)
+    results.sort((a, b) => {
+      if (a.days_until_stockout === null && b.days_until_stockout === null) return 0;
+      if (a.days_until_stockout === null) return 1;
+      if (b.days_until_stockout === null) return -1;
+      return a.days_until_stockout - b.days_until_stockout;
+    });
+
+    res.json(results);
+  } catch (err) {
+    console.error('Forecast stockout error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/forecast/peak-period ───────────────────────────────────────────
+// Analyse a past peak period and compare with current stock
+router.get('/forecast/peak-period', async (req, res) => {
+  const { store = 'au', period_start, period_end } = req.query;
+  if (!period_start || !period_end) return res.status(400).json({ error: 'period_start and period_end required (YYYY-MM-DD)' });
+
+  try {
+    // Get sales during the peak period
+    const { data: sales, error: sErr } = await supabase
+      .from('shopify_sales')
+      .select('sku, product_name, quantity_sold, sale_price, order_date')
+      .gte('order_date', period_start)
+      .lte('order_date', period_end)
+      .eq('store', store);
+    if (sErr) return res.status(500).json({ error: sErr.message });
+
+    // Daily breakdown
+    const dailyMap = {};
+    const skuMap = {};
+    let totalRevenue = 0;
+    let totalUnits = 0;
+
+    for (const s of (sales || [])) {
+      const qty = s.quantity_sold || 0;
+      const rev = qty * parseFloat(s.sale_price || 0);
+      totalRevenue += rev;
+      totalUnits += qty;
+
+      dailyMap[s.order_date] = (dailyMap[s.order_date] || 0) + rev;
+
+      if (!skuMap[s.sku]) {
+        skuMap[s.sku] = { sku: s.sku, product_name: s.product_name, units_sold: 0, revenue: 0 };
+      }
+      skuMap[s.sku].units_sold += qty;
+      skuMap[s.sku].revenue += rev;
+    }
+
+    // Get current stock
+    const { data: lots } = await supabase
+      .from('purchase_order_lines')
+      .select('sku, quantity_remaining')
+      .gt('quantity_remaining', 0);
+
+    const stockMap = {};
+    for (const lot of (lots || [])) {
+      stockMap[lot.sku] = (stockMap[lot.sku] || 0) + lot.quantity_remaining;
+    }
+
+    // Build daily breakdown sorted
+    const daily = Object.entries(dailyMap)
+      .map(([date, revenue]) => ({ date, revenue: Math.round(revenue * 100) / 100 }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    // Gap analysis
+    const gapAnalysis = Object.values(skuMap).map(s => {
+      const currentStock = stockMap[s.sku] || 0;
+      const gap = currentStock - s.units_sold;
+      let status = 'sufficient';
+      if (gap < 0) status = 'insufficient';
+      else if (gap < s.units_sold * 0.25) status = 'at_risk';
+
+      return {
+        sku: s.sku,
+        product_name: s.product_name,
+        peak_units_sold: s.units_sold,
+        peak_revenue: Math.round(s.revenue * 100) / 100,
+        current_stock: currentStock,
+        stock_gap: gap,
+        status,
+      };
+    }).sort((a, b) => a.stock_gap - b.stock_gap);
+
+    // How many equivalent events can current stock support?
+    const equivalentEvents = totalUnits > 0
+      ? Math.round(Object.values(stockMap).reduce((s, v) => s + v, 0) / totalUnits * 10) / 10
+      : null;
+
+    res.json({
+      period: { start: period_start, end: period_end },
+      total_revenue: Math.round(totalRevenue * 100) / 100,
+      total_units: totalUnits,
+      daily,
+      sku_breakdown: Object.values(skuMap).map(s => ({
+        ...s,
+        revenue: Math.round(s.revenue * 100) / 100,
+      })),
+      gap_analysis: gapAnalysis,
+      equivalent_events: equivalentEvents,
+    });
+  } catch (err) {
+    console.error('Peak period error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.buildCogsData = buildCogsData;
