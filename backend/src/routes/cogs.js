@@ -386,12 +386,12 @@ router.get('/resends', async (req, res) => {
     return c && c.totalQty > 0 ? c.totalCost / c.totalQty : 0;
   };
 
-  // Query resend orders
+  // Query resend orders (order_name is Shopify's order.name e.g. "#6310-RESEND")
   let query = supabase
     .from('shopify_sales')
-    .select('shopify_order_id, order_number, customer_name, sku, product_name, quantity_sold, order_date, fulfillment_location')
+    .select('shopify_order_id, order_number, order_name, customer_name, sku, product_name, quantity_sold, order_date, fulfillment_location')
     .eq('store', store)
-    .ilike('order_number', '%-RESEND%')
+    .ilike('order_name', '%-RESEND%')
     .order('order_date', { ascending: false });
 
   if (start_date) query = query.gte('order_date', start_date);
@@ -404,10 +404,11 @@ router.get('/resends', async (req, res) => {
   const orderMap = {};
   for (const s of (sales || [])) {
     if (!orderMap[s.shopify_order_id]) {
-      const originalOrderNumber = (s.order_number || '').replace(/-RESEND.*$/i, '');
+      const originalOrderNumber = (s.order_name || '').replace(/-RESEND.*$/i, '').replace(/^#/, '');
       orderMap[s.shopify_order_id] = {
         shopify_order_id:      s.shopify_order_id,
         order_number:          s.order_number || s.shopify_order_id,
+        order_name:            s.order_name || null,
         original_order_number: originalOrderNumber,
         customer_name:         s.customer_name || '—',
         order_date:            s.order_date,

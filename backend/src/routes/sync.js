@@ -217,6 +217,7 @@ router.post('/shopify', async (req, res) => {
         salesRecords.push({
           shopify_order_id:     String(order.id),
           order_number:         order.order_number ? String(order.order_number) : null,
+          order_name:           order.name || null,
           customer_name:        customerName || null,
           sku,
           product_name:         d.product_name,
