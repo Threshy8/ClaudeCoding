@@ -225,22 +225,6 @@ async function main() {
         });
       }
 
-      const taxAmount = iTaxes !== -1 ? (parseFloat(row[iTaxes]) || 0) : 0;
-      if (taxAmount > 0) {
-        records.push({
-          shopify_order_id: shopifyOrderId,
-          order_number: orderNumber,
-          order_name: orderName,
-          sku: 'tax',
-          product_name: 'Tax Collected',
-          quantity_sold: 1,
-          sale_price: Math.round(taxAmount * 100) / 100,
-          order_date: orderDate,
-          store: 'au',
-          fulfillment_location: 'SCC',
-          customer_name: customerName || null,
-        });
-      }
     }
 
     if (records.length % LOG_EVERY === 0) {

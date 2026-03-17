@@ -238,17 +238,6 @@ router.post('/shopify', async (req, res) => {
         });
       }
 
-      // Tax row
-      const taxTotal = parseFloat(order.total_tax || '0') || 0;
-      if (taxTotal > 0) {
-        salesRecords.push({
-          ...commonFields,
-          sku:           'tax',
-          product_name:  'Tax Collected',
-          quantity_sold: 1,
-          sale_price:    Math.round(taxTotal * 100) / 100,
-        });
-      }
     }
 
     // ── Pass 2: refund records ────────────────────────────────────────────────
