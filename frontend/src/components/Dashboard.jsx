@@ -76,12 +76,7 @@ export default function Dashboard({ dateRange }) {
         <div className="kpi-card">
           <div className="kpi-label">Revenue</div>
           <div className="kpi-value">{mc(_fmt(totalCollected))}</div>
-          {redoFees > 0 && (
-            <div className="kpi-sub" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              excl. {mc(_fmt(redoFees))} Redo fees
-            </div>
-          )}
-          <div className="kpi-sub">{rangeLabel}</div>
+          <div className="kpi-sub">This Month</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">True COGS</div>
