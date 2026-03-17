@@ -259,9 +259,9 @@ router.get('/summary', async (req, res) => {
       periodEnd = throughDate.toISOString().slice(0, 10);
     } else {
       // Auto-cap at today for the current month
-      const tz = process.env.SHOPIFY_STORE_TIMEZONE;
+      const tz = process.env.SHOPIFY_STORE_TIMEZONE || 'Australia/Sydney';
       const now = new Date();
-      const today = tz ? now.toLocaleDateString('en-CA', { timeZone: tz }) : now.toISOString().slice(0, 10);
+      const today = now.toLocaleDateString('en-CA', { timeZone: tz });
       const isCurrentMonth = period === today.slice(0, 7);
       if (isCurrentMonth && today >= periodStart && today < periodEnd) {
         const [ty, tm, td] = today.split('-').map(Number);

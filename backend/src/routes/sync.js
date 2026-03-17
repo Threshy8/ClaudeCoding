@@ -153,7 +153,8 @@ router.post('/shopify', async (req, res) => {
     const token = await getAccessToken(store, storeUrl, accessToken, clientId, clientSecret);
     const orders = await fetchAllOrders(storeUrl, token);
 
-    const tz = process.env.SHOPIFY_STORE_TIMEZONE;
+    // Default to Australia/Sydney for AU store if not explicitly set
+    const tz = process.env.SHOPIFY_STORE_TIMEZONE || (store === 'au' ? 'Australia/Sydney' : undefined);
 
     function toStoreDate(isoString) {
       if (!isoString) return null;
@@ -245,7 +246,9 @@ router.post('/shopify', async (req, res) => {
 
     for (const order of orders) {
       if (order.test) continue;
-      if (order.cancelled_at) continue;
+      // NOTE: Do NOT skip cancelled orders here — cancelled orders can still
+      // have refunds that Shopify counts in "Returns". Pass 1 correctly skips
+      // cancelled orders for gross sales, so the net effect is correct.
       if (order.currency !== 'AUD') continue;
 
       const orderDate = toStoreDate(order.created_at);
