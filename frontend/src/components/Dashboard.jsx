@@ -107,6 +107,14 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
   const shippingTotal = skuData.shipping_total || 0;
   const taxTotal = skuData.tax_total || 0;
   const totalCollected = totalRevenue + redoFees + shippingTotal + taxTotal;
+
+  // Sales breakdown from backend
+  const grossSales = skuData.gross_sales || 0;
+  const totalDiscounts = skuData.total_discounts || 0;
+  const totalReturns = skuData.total_returns || 0;
+  const netSales = skuData.net_sales || 0;
+  const shippingRevenue = skuData.shipping_revenue || 0;
+  const apiTotalCollected = skuData.total_collected || 0;
   const totalCogs = rows.reduce((s, r) => s + (r.cogs || 0), 0);
   const grossProfit = totalRevenue - totalCogs;
   const margin = totalRevenue > 0 ? Math.round(grossProfit / totalRevenue * 100) : null;
@@ -180,6 +188,49 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
           <div className="kpi-label">Gross Margin</div>
           <div className={`kpi-value ${marginClass}`}>{margin != null ? mp(margin) : '—'}</div>
           <div className="kpi-sub">(Revenue − COGS) / Revenue</div>
+        </div>
+      </div>
+
+      {/* Total Sales Breakdown */}
+      <div className="card sales-breakdown">
+        <div className="card-title">Total Sales Breakdown — {rangeLabel}</div>
+        <div className="sb-rows">
+          <div className="sb-row">
+            <span className="sb-label">Gross Sales</span>
+            <span className="sb-value">{mc(_fmt(grossSales))}</span>
+          </div>
+          {totalDiscounts > 0 && (
+            <div className="sb-row sb-negative">
+              <span className="sb-label">Discounts</span>
+              <span className="sb-value">−{mc(_fmt(totalDiscounts))}</span>
+            </div>
+          )}
+          {totalReturns > 0 && (
+            <div className="sb-row sb-negative">
+              <span className="sb-label">Returns</span>
+              <span className="sb-value">−{mc(_fmt(totalReturns))}</span>
+            </div>
+          )}
+          <div className="sb-row sb-subtotal">
+            <span className="sb-label">Net Sales</span>
+            <span className="sb-value">{mc(_fmt(netSales))}</span>
+          </div>
+          {shippingRevenue > 0 && (
+            <div className="sb-row">
+              <span className="sb-label">Shipping Charges</span>
+              <span className="sb-value">{mc(_fmt(shippingRevenue))}</span>
+            </div>
+          )}
+          {redoFees > 0 && (
+            <div className="sb-row">
+              <span className="sb-label">Redo Fees</span>
+              <span className="sb-value">{mc(_fmt(redoFees))}</span>
+            </div>
+          )}
+          <div className="sb-row sb-total">
+            <span className="sb-label">Total Collected</span>
+            <span className="sb-value">{mc(_fmt(apiTotalCollected))}</span>
+          </div>
         </div>
       </div>
 

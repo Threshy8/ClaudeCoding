@@ -180,6 +180,17 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   const shippingTotal = _sumVirtual(virtualRows, 'shipping');
   const taxTotal = _sumVirtual(virtualRows, 'tax');
 
+  // --- Sales breakdown ---
+  // NOTE: sale_price is already net of discounts (discount_allocations subtracted during
+  // Shopify sync), so gross_sales = item revenue after discounts, before refunds.
+  // Discount breakdown is not stored separately in shopify_sales.
+  const grossSales = Object.values(periodSkuMap).reduce((s, d) => s + d.gross_revenue, 0);
+  const totalDiscounts = 0; // Already baked into sale_price during sync
+  const totalReturns = Object.values(periodRefundMap).reduce((s, d) => s + d.subtotal, 0);
+  const netSales = grossSales - totalReturns;
+  const shippingRevenue = shippingTotal;
+  const totalCollected = netSales + shippingRevenue + redoFees;
+
   // --- Totals ---
   const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
   const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
@@ -198,6 +209,13 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     redo_units: redoUnits,
     shipping_total: Math.round(shippingTotal * 100) / 100,
     tax_total: Math.round(taxTotal * 100) / 100,
+    // Sales breakdown (mirrors Shopify's Total Sales view)
+    gross_sales: Math.round(grossSales * 100) / 100,
+    total_discounts: totalDiscounts,
+    total_returns: Math.round(totalReturns * 100) / 100,
+    net_sales: Math.round(netSales * 100) / 100,
+    shipping_revenue: Math.round(shippingRevenue * 100) / 100,
+    total_collected: Math.round(totalCollected * 100) / 100,
     sku_breakdown: skuBreakdown,
   };
 }
@@ -482,7 +500,7 @@ router.get('/entries/by-sku', async (req, res) => {
       .lte('order_date', end_date)
       .eq('store', store);
     if (eErr) return res.status(500).json({ error: eErr.message });
-    if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0, shipping_total: 0, tax_total: 0 });
+    if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0, shipping_total: 0, tax_total: 0, gross_sales: 0, total_discounts: 0, total_returns: 0, net_sales: 0, shipping_revenue: 0, total_collected: 0 });
 
     // Group by SKU
     const skuMap = {};
@@ -596,6 +614,14 @@ router.get('/entries/by-sku', async (req, res) => {
     const shippingTotal = _sumV(virtualRows, 'shipping');
     const taxTotal = _sumV(virtualRows, 'tax');
 
+    // Sales breakdown — same note: sale_price is net of discounts from sync
+    const grossSales = Object.values(skuMap).reduce((s, d) => s + d.revenue, 0);
+    const totalDiscounts = 0; // Already baked into sale_price during sync
+    const totalReturns = Object.values(refundMap).reduce((s, d) => s + d.subtotal, 0);
+    const netSales = grossSales - totalReturns;
+    const shippingRevenue = shippingTotal;
+    const totalCollected = netSales + shippingRevenue + redoFees;
+
     const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
     const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
     const totalInvValue = skuBreakdown.reduce((s, r) => s + r.inventory_value, 0);
@@ -610,6 +636,12 @@ router.get('/entries/by-sku', async (req, res) => {
       redo_units: redoUnits,
       shipping_total: Math.round(shippingTotal * 100) / 100,
       tax_total: Math.round(taxTotal * 100) / 100,
+      gross_sales: Math.round(grossSales * 100) / 100,
+      total_discounts: totalDiscounts,
+      total_returns: Math.round(totalReturns * 100) / 100,
+      net_sales: Math.round(netSales * 100) / 100,
+      shipping_revenue: Math.round(shippingRevenue * 100) / 100,
+      total_collected: Math.round(totalCollected * 100) / 100,
       sku_breakdown: skuBreakdown,
     });
   } catch (err) {

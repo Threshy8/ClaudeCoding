@@ -319,6 +319,75 @@ body {
   font-style: italic;
 }
 
+/* ===== Sales Breakdown Panel ===== */
+.sales-breakdown {
+  margin-bottom: 28px;
+  max-width: 420px;
+}
+
+.sb-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+
+.sb-label {
+  font-size: 13px;
+  color: var(--text-body);
+}
+
+.sb-value {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.sb-row.sb-negative .sb-value {
+  color: var(--red);
+}
+
+.sb-row.sb-subtotal {
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  margin: 4px 0;
+  padding: 12px 0;
+}
+
+.sb-row.sb-subtotal .sb-label,
+.sb-row.sb-subtotal .sb-value {
+  font-weight: 600;
+}
+
+.sb-row.sb-total {
+  border-top: 2px solid var(--accent);
+  margin-top: 4px;
+  padding-top: 14px;
+}
+
+.sb-row.sb-total .sb-label {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sb-row.sb-total .sb-value {
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--accent-deep);
+}
+
 /* ===== Tables ===== */
 .table-wrap { overflow-x: auto; }
 
