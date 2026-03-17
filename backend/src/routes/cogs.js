@@ -201,7 +201,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     period: periodLabel,
     period_start: periodStart,
     period_end: periodEnd,
-    total_revenue: Math.round((totalRevenue + redoFees + shippingTotal + taxTotal) * 100) / 100,
+    total_revenue: Math.round((totalRevenue + redoFees + shippingTotal) * 100) / 100,
     total_cogs: Math.round(totalCogs * 100) / 100,
     total_inventory_value: Math.round(totalInventoryValue * 100) / 100,
     gross_margin_pct: Math.round(overallMargin * 100) / 100,
@@ -625,7 +625,7 @@ router.get('/entries/by-sku', async (req, res) => {
 
     res.json({
       period: `${start_date} – ${end_date}`,
-      total_revenue: Math.round((totalRevenue + redoFees + shippingTotal + taxTotal) * 100) / 100,
+      total_revenue: Math.round((totalRevenue + redoFees + shippingTotal) * 100) / 100,
       total_cogs: Math.round(totalCogs * 100) / 100,
       total_inventory_value: Math.round(totalInvValue * 100) / 100,
       gross_margin_pct: totalRevenue > 0 ? Math.round((totalRevenue - totalCogs) / totalRevenue * 10000) / 100 : 0,

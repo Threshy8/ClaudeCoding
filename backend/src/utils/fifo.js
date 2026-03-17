@@ -89,7 +89,8 @@ async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
   const orderUnitCounts = {};
   for (const s of sales) {
     if (s.order_date < startDate) continue;
-    if ((s.sku || '').toLowerCase().includes('x-redo')) continue;
+    const skuLower = (s.sku || '').toLowerCase();
+    if (skuLower === 'x-redo' || skuLower === 'shipping' || skuLower === 'tax') continue;
     orderUnitCounts[s.shopify_order_id] = (orderUnitCounts[s.shopify_order_id] || 0) + s.quantity_sold;
   }
 
@@ -100,8 +101,9 @@ async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
     // Skip sales before the opening stock date
     if (sale.order_date < startDate) continue;
 
-    // Skip x-redo lines
-    if ((sale.sku || '').toLowerCase().includes('x-redo')) continue;
+    // Skip virtual SKU lines (redo fees, shipping, tax)
+    const skuLower2 = (sale.sku || '').toLowerCase();
+    if (skuLower2 === 'x-redo' || skuLower2 === 'shipping' || skuLower2 === 'tax') continue;
 
     const key = `${sale.shopify_order_id}__${sale.sku}`;
 
