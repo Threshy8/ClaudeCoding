@@ -591,16 +591,13 @@ router.get('/entries/by-sku', async (req, res) => {
       }
     }
 
-    // Virtual SKU totals — clamp to the date range that cogs_entries actually covers,
-    // since the FIFO engine may not have processed older sales yet
-    const effectiveStart = entries.reduce((min, e) => e.order_date < min ? e.order_date : min, entries[0].order_date);
-    const effectiveEnd = entries.reduce((max, e) => e.order_date > max ? e.order_date : max, entries[0].order_date);
-
+    // Virtual SKU totals — use the user-requested date range (not cogs_entries effective
+    // range) so redo/shipping figures match the same period as the rest of the breakdown
     const { data: virtualRows } = await supabase
       .from('shopify_sales')
       .select('sku, quantity_sold, sale_price')
-      .gte('order_date', effectiveStart)
-      .lte('order_date', effectiveEnd)
+      .gte('order_date', start_date)
+      .lte('order_date', end_date)
       .eq('store', store)
       .in('sku', ['x-redo', 'shipping', 'tax']);
 

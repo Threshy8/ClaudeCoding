@@ -102,22 +102,17 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
 
   const VIRTUAL_SKUS = ['x-redo', 'shipping', 'tax'];
   const rows = (skuData.sku_breakdown || []).filter(r => !VIRTUAL_SKUS.includes((r.sku || '').toLowerCase()));
-  const totalRevenue = rows.reduce((s, r) => s + (r.revenue || 0), 0);
-  const redoFees = skuData.redo_fees || 0;
-  const shippingTotal = skuData.shipping_total || 0;
-  const taxTotal = skuData.tax_total || 0;
-  const totalCollected = totalRevenue + redoFees + shippingTotal + taxTotal;
 
-  // Sales breakdown from backend
+  // Single source of truth from the backend for the revenue/breakdown figures
   const grossSales = skuData.gross_sales || 0;
-  const totalDiscounts = skuData.total_discounts || 0;
   const totalReturns = skuData.total_returns || 0;
-  const netSales = skuData.net_sales || 0;
   const shippingRevenue = skuData.shipping_revenue || 0;
-  const apiTotalCollected = skuData.total_collected || 0;
+  const redoFees = skuData.redo_fees || 0;
+  const totalCollected = skuData.total_collected || 0;
   const totalCogs = rows.reduce((s, r) => s + (r.cogs || 0), 0);
-  const grossProfit = totalRevenue - totalCogs;
-  const margin = totalRevenue > 0 ? Math.round(grossProfit / totalRevenue * 100) : null;
+  const netProductRevenue = grossSales - totalReturns;
+  const grossProfit = netProductRevenue - totalCogs;
+  const margin = netProductRevenue > 0 ? Math.round(grossProfit / netProductRevenue * 100) : null;
   const marginClass = margin == null ? '' : margin >= 30 ? 'green' : margin >= 10 ? 'accent' : 'red';
 
   const inventoryValue = inventory?.total_inventory_value ?? skuData.total_inventory_value ?? 0;
@@ -199,22 +194,12 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
             <span className="sb-label">Gross Sales</span>
             <span className="sb-value">{mc(_fmt(grossSales))}</span>
           </div>
-          {totalDiscounts > 0 && (
-            <div className="sb-row sb-negative">
-              <span className="sb-label">Discounts</span>
-              <span className="sb-value">−{mc(_fmt(totalDiscounts))}</span>
-            </div>
-          )}
           {totalReturns > 0 && (
             <div className="sb-row sb-negative">
               <span className="sb-label">Returns</span>
               <span className="sb-value">−{mc(_fmt(totalReturns))}</span>
             </div>
           )}
-          <div className="sb-row sb-subtotal">
-            <span className="sb-label">Net Sales</span>
-            <span className="sb-value">{mc(_fmt(netSales))}</span>
-          </div>
           {shippingRevenue > 0 && (
             <div className="sb-row">
               <span className="sb-label">Shipping Charges</span>
@@ -229,7 +214,7 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
           )}
           <div className="sb-row sb-total">
             <span className="sb-label">Total Collected</span>
-            <span className="sb-value">{mc(_fmt(apiTotalCollected))}</span>
+            <span className="sb-value">{mc(_fmt(totalCollected))}</span>
           </div>
         </div>
       </div>
@@ -305,26 +290,13 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
                     <td className="text-right"><span className="text-muted">—</span></td>
                   </tr>
                 )}
-                {shippingTotal > 0 && (
+                {shippingRevenue > 0 && (
                   <tr key="shipping">
                     <td><span className="mono">shipping</span></td>
                     <td>Shipping Charges</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right"><span className="text-muted">—</span></td>
-                    <td className="text-right">{mc(_fmt(shippingTotal))}</td>
-                    <td className="text-right"><span className="text-muted">—</span></td>
-                    <td className="text-right"><span className="text-muted">—</span></td>
-                    <td className="text-right"><span className="text-muted">—</span></td>
-                    <td className="text-right"><span className="text-muted">—</span></td>
-                  </tr>
-                )}
-                {taxTotal > 0 && (
-                  <tr key="tax">
-                    <td><span className="mono">tax</span></td>
-                    <td>Tax Collected</td>
-                    <td className="text-right"><span className="text-muted">—</span></td>
-                    <td className="text-right"><span className="text-muted">—</span></td>
-                    <td className="text-right">{mc(_fmt(taxTotal))}</td>
+                    <td className="text-right">{mc(_fmt(shippingRevenue))}</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right"><span className="text-muted">—</span></td>
