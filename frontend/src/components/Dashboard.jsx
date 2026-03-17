@@ -100,10 +100,13 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
   if (error)   return <div className="error-msg">{error}</div>;
   if (!skuData) return null;
 
-  const rows = (skuData.sku_breakdown || []).filter(r => !(r.sku || '').toLowerCase().includes('x-redo'));
+  const VIRTUAL_SKUS = ['x-redo', 'shipping', 'tax'];
+  const rows = (skuData.sku_breakdown || []).filter(r => !VIRTUAL_SKUS.includes((r.sku || '').toLowerCase()));
   const totalRevenue = rows.reduce((s, r) => s + (r.revenue || 0), 0);
   const redoFees = skuData.redo_fees || 0;
-  const totalCollected = totalRevenue + redoFees;
+  const shippingTotal = skuData.shipping_total || 0;
+  const taxTotal = skuData.tax_total || 0;
+  const totalCollected = totalRevenue + redoFees + shippingTotal + taxTotal;
   const totalCogs = rows.reduce((s, r) => s + (r.cogs || 0), 0);
   const grossProfit = totalRevenue - totalCogs;
   const margin = totalRevenue > 0 ? Math.round(grossProfit / totalRevenue * 100) : null;
@@ -245,6 +248,32 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
                     <td className="text-right">{mn(skuData.redo_units || 0)}</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right">{mc(_fmt(redoFees))}</td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                  </tr>
+                )}
+                {shippingTotal > 0 && (
+                  <tr key="shipping">
+                    <td><span className="mono">shipping</span></td>
+                    <td>Shipping Charges</td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right">{mc(_fmt(shippingTotal))}</td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                  </tr>
+                )}
+                {taxTotal > 0 && (
+                  <tr key="tax">
+                    <td><span className="mono">tax</span></td>
+                    <td>Tax Collected</td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right"><span className="text-muted">—</span></td>
+                    <td className="text-right">{mc(_fmt(taxTotal))}</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right"><span className="text-muted">—</span></td>

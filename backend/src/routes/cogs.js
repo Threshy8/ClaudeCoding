@@ -23,7 +23,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   const { data: allSales, error: allSalesError } = await supabase
     .from('shopify_sales')
     .select('sku, quantity_sold')
-    .neq('sku', 'x-redo');
+    .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
   if (allSalesError) throw new Error(allSalesError.message);
 
@@ -40,7 +40,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .select('sku, product_name, quantity_sold, sale_price, order_date')
     .gte('order_date', periodStart)
     .lt('order_date', periodEnd)
-    .neq('sku', 'x-redo');
+    .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
   if (periodSalesError) throw new Error(periodSalesError.message);
 
@@ -162,16 +162,23 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     }
   }
 
-  // --- Redo fees (x-redo line items in the period) ---
-  const { data: redoRows } = await supabase
+  // --- Virtual SKU totals (Redo fees, Shipping, Tax) ---
+  const { data: virtualRows } = await supabase
     .from('shopify_sales')
-    .select('quantity_sold, sale_price')
+    .select('sku, quantity_sold, sale_price')
     .gte('order_date', periodStart)
     .lt('order_date', periodEnd)
-    .eq('sku', 'x-redo');
+    .in('sku', ['x-redo', 'shipping', 'tax']);
 
-  const redoFees = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
-  const redoUnits = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0), 0);
+  function _sumVirtual(rows, sku) {
+    return (rows || []).filter(r => r.sku === sku)
+      .reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+  }
+  const redoFees = _sumVirtual(virtualRows, 'x-redo');
+  const redoUnits = (virtualRows || []).filter(r => r.sku === 'x-redo')
+    .reduce((s, r) => s + (r.quantity_sold || 0), 0);
+  const shippingTotal = _sumVirtual(virtualRows, 'shipping');
+  const taxTotal = _sumVirtual(virtualRows, 'tax');
 
   // --- Totals ---
   const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
@@ -183,12 +190,14 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     period: periodLabel,
     period_start: periodStart,
     period_end: periodEnd,
-    total_revenue: Math.round((totalRevenue + redoFees) * 100) / 100,
+    total_revenue: Math.round((totalRevenue + redoFees + shippingTotal + taxTotal) * 100) / 100,
     total_cogs: Math.round(totalCogs * 100) / 100,
     total_inventory_value: Math.round(totalInventoryValue * 100) / 100,
     gross_margin_pct: Math.round(overallMargin * 100) / 100,
     redo_fees: Math.round(redoFees * 100) / 100,
     redo_units: redoUnits,
+    shipping_total: Math.round(shippingTotal * 100) / 100,
+    tax_total: Math.round(taxTotal * 100) / 100,
     sku_breakdown: skuBreakdown,
   };
 }
@@ -318,7 +327,7 @@ router.get('/orders', async (req, res) => {
     .gte('order_date', start_date)
     .lte('order_date', end_date)
     .eq('store', store)
-    .neq('sku', 'x-redo')
+    .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax')
     .order('order_date', { ascending: false });
   if (sErr) return res.status(500).json({ error: sErr.message });
 
@@ -473,7 +482,7 @@ router.get('/entries/by-sku', async (req, res) => {
       .lte('order_date', end_date)
       .eq('store', store);
     if (eErr) return res.status(500).json({ error: eErr.message });
-    if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0 });
+    if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0, shipping_total: 0, tax_total: 0 });
 
     // Group by SKU
     const skuMap = {};
@@ -492,7 +501,7 @@ router.get('/entries/by-sku', async (req, res) => {
 
     // Get inventory on-hand from WAC data (purchases − all-time net sold)
     const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
-    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo');
+    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded');
 
     const purchaseMap = {};
@@ -564,21 +573,28 @@ router.get('/entries/by-sku', async (req, res) => {
       }
     }
 
-    // Redo fees — clamp to the date range that cogs_entries actually covers,
+    // Virtual SKU totals — clamp to the date range that cogs_entries actually covers,
     // since the FIFO engine may not have processed older sales yet
     const effectiveStart = entries.reduce((min, e) => e.order_date < min ? e.order_date : min, entries[0].order_date);
     const effectiveEnd = entries.reduce((max, e) => e.order_date > max ? e.order_date : max, entries[0].order_date);
 
-    const { data: redoRows } = await supabase
+    const { data: virtualRows } = await supabase
       .from('shopify_sales')
-      .select('quantity_sold, sale_price')
+      .select('sku, quantity_sold, sale_price')
       .gte('order_date', effectiveStart)
       .lte('order_date', effectiveEnd)
       .eq('store', store)
-      .eq('sku', 'x-redo');
+      .in('sku', ['x-redo', 'shipping', 'tax']);
 
-    const redoFees = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
-    const redoUnits = (redoRows || []).reduce((s, r) => s + (r.quantity_sold || 0), 0);
+    function _sumV(rows, sku) {
+      return (rows || []).filter(r => r.sku === sku)
+        .reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+    }
+    const redoFees = _sumV(virtualRows, 'x-redo');
+    const redoUnits = (virtualRows || []).filter(r => r.sku === 'x-redo')
+      .reduce((s, r) => s + (r.quantity_sold || 0), 0);
+    const shippingTotal = _sumV(virtualRows, 'shipping');
+    const taxTotal = _sumV(virtualRows, 'tax');
 
     const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
     const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
@@ -586,12 +602,14 @@ router.get('/entries/by-sku', async (req, res) => {
 
     res.json({
       period: `${start_date} – ${end_date}`,
-      total_revenue: Math.round((totalRevenue + redoFees) * 100) / 100,
+      total_revenue: Math.round((totalRevenue + redoFees + shippingTotal + taxTotal) * 100) / 100,
       total_cogs: Math.round(totalCogs * 100) / 100,
       total_inventory_value: Math.round(totalInvValue * 100) / 100,
       gross_margin_pct: totalRevenue > 0 ? Math.round((totalRevenue - totalCogs) / totalRevenue * 10000) / 100 : 0,
       redo_fees: Math.round(redoFees * 100) / 100,
       redo_units: redoUnits,
+      shipping_total: Math.round(shippingTotal * 100) / 100,
+      tax_total: Math.round(taxTotal * 100) / 100,
       sku_breakdown: skuBreakdown,
     });
   } catch (err) {
@@ -631,7 +649,8 @@ router.get('/entries/by-order', async (req, res) => {
     // Group by order
     const orderMap = {};
     for (const e of entries) {
-      if ((e.sku || '').toLowerCase().includes('x-redo')) continue;
+      const skuLower = (e.sku || '').toLowerCase();
+      if (skuLower === 'x-redo' || skuLower === 'shipping' || skuLower === 'tax') continue;
       if (!orderMap[e.shopify_order_id]) {
         orderMap[e.shopify_order_id] = {
           shopify_order_id: e.shopify_order_id,
@@ -713,7 +732,7 @@ router.get('/inventory/summary', async (req, res) => {
       .select('sku, quantity_sold')
       .gte('order_date', monthStart)
       .eq('store', store)
-      .neq('sku', 'x-redo');
+      .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
     const monthSoldMap = {};
     for (const s of (monthSales || [])) {
@@ -727,7 +746,7 @@ router.get('/inventory/summary', async (req, res) => {
       .select('sku, quantity_sold, sale_price')
       .gte('order_date', thirtyDaysAgo)
       .eq('store', store)
-      .neq('sku', 'x-redo');
+      .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
     const salePriceMap = {}; // { sku: { totalRev, totalQty } }
     for (const s of (recentSales || [])) {
@@ -787,7 +806,7 @@ router.get('/forecast/revenue', async (req, res) => {
       .gte('order_date', ninetyAgo)
       .lte('order_date', today)
       .eq('store', store)
-      .neq('sku', 'x-redo');
+      .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     if (sErr) return res.status(500).json({ error: sErr.message });
 
     // Build daily revenue map
@@ -888,7 +907,7 @@ router.get('/forecast/stockout', async (req, res) => {
       .gte('order_date', thirtyAgo)
       .lte('order_date', today)
       .eq('store', store)
-      .neq('sku', 'x-redo');
+      .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     if (rsErr) return res.status(500).json({ error: rsErr.message });
 
     const soldMap = {};
@@ -959,7 +978,7 @@ router.get('/forecast/peak-period', async (req, res) => {
       .gte('order_date', period_start)
       .lte('order_date', period_end)
       .eq('store', store)
-      .neq('sku', 'x-redo');
+      .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     if (sErr) return res.status(500).json({ error: sErr.message });
 
     // Daily breakdown

@@ -120,6 +120,8 @@ async function main() {
   const iLineitemDiscount = col('Lineitem discount');
   const iBillingName     = col('Billing Name');
   const iId              = col('Id');
+  const iShipping        = col('Shipping');
+  const iTaxes           = col('Taxes');
 
   // Validate required columns
   const required = { Name: iName, 'Financial Status': iFinancialStatus, 'Created at': iCreatedAt,
@@ -133,13 +135,14 @@ async function main() {
 
   // Order-level columns that Shopify only populates on the first line item row.
   // Continuation rows for the same order leave these blank — carry them forward.
-  const ORDER_LEVEL_COLS = [iName, iFinancialStatus, iCreatedAt, iBillingName, iId].filter(i => i !== -1);
+  const ORDER_LEVEL_COLS = [iName, iFinancialStatus, iCreatedAt, iBillingName, iId, iShipping, iTaxes].filter(i => i !== -1);
 
   const records = [];
   let skippedStatus = 0;
   let skippedNoSku = 0;
   let skippedNoQty = 0;
   let prevOrderFields = {};
+  const seenOrderShipping = new Set(); // track which orders already have shipping/tax rows
 
   for (let r = 1; r < allRows.length; r++) {
     const row = allRows[r];
@@ -200,6 +203,45 @@ async function main() {
       fulfillment_location: 'SCC',
       customer_name: customerName || null,
     });
+
+    // Add shipping/tax rows once per order (on first line item seen)
+    if (!seenOrderShipping.has(shopifyOrderId)) {
+      seenOrderShipping.add(shopifyOrderId);
+
+      const shippingAmount = iShipping !== -1 ? (parseFloat(row[iShipping]) || 0) : 0;
+      if (shippingAmount > 0) {
+        records.push({
+          shopify_order_id: shopifyOrderId,
+          order_number: orderNumber,
+          order_name: orderName,
+          sku: 'shipping',
+          product_name: 'Shipping Charge',
+          quantity_sold: 1,
+          sale_price: Math.round(shippingAmount * 100) / 100,
+          order_date: orderDate,
+          store: 'au',
+          fulfillment_location: 'SCC',
+          customer_name: customerName || null,
+        });
+      }
+
+      const taxAmount = iTaxes !== -1 ? (parseFloat(row[iTaxes]) || 0) : 0;
+      if (taxAmount > 0) {
+        records.push({
+          shopify_order_id: shopifyOrderId,
+          order_number: orderNumber,
+          order_name: orderName,
+          sku: 'tax',
+          product_name: 'Tax Collected',
+          quantity_sold: 1,
+          sale_price: Math.round(taxAmount * 100) / 100,
+          order_date: orderDate,
+          store: 'au',
+          fulfillment_location: 'SCC',
+          customer_name: customerName || null,
+        });
+      }
+    }
 
     if (records.length % LOG_EVERY === 0) {
       console.log(`  Parsed ${records.length} records so far (row ${r}/${allRows.length - 1}) …`);

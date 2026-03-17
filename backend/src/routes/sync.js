@@ -171,7 +171,6 @@ router.post('/shopify', async (req, res) => {
       if (order.currency !== 'AUD') continue;
 
       const orderDate = toStoreDate(order.created_at);
-      const orderTotal = parseFloat(order.total_price || '0') || 0;
 
       const firstFulfillment = (order.fulfillments || [])[0];
       const assignedLocation =
@@ -183,51 +182,71 @@ router.post('/shopify', async (req, res) => {
           ? 'Unfulfilled' : 'Unknown Location');
 
       const lineItems = order.line_items || [];
-      const lines = [];
-      let grossLineTotal = 0;
+      const bySku = {};
 
       for (const item of lineItems) {
         const qty = item.quantity || 0;
         if (qty <= 0) continue;
         const sku = item.sku || `NO-SKU-${item.product_id}`;
-        const lineGross = parseFloat(item.price) * qty;
-        grossLineTotal += lineGross;
-        lines.push({
-          sku,
-          product_name: item.title || item.name || 'Unknown',
-          qty,
-          lineGross,
-        });
-      }
 
-      if (lines.length === 0) continue;
+        // Subtract discount allocations to get net line revenue
+        const discountTotal = (item.discount_allocations || [])
+          .reduce((sum, da) => sum + (parseFloat(da.amount) || 0), 0);
+        const lineRevenue = (parseFloat(item.price) * qty) - discountTotal;
 
-      const scale = grossLineTotal > 0 ? orderTotal / grossLineTotal : 1;
-
-      const bySku = {};
-      for (const { sku, product_name, qty, lineGross } of lines) {
-        if (!bySku[sku]) bySku[sku] = { product_name, qty: 0, revenue: 0 };
+        if (!bySku[sku]) bySku[sku] = { product_name: item.title || item.name || 'Unknown', qty: 0, revenue: 0 };
         bySku[sku].qty += qty;
-        bySku[sku].revenue += lineGross * scale;
+        bySku[sku].revenue += lineRevenue;
       }
+
+      if (Object.keys(bySku).length === 0) continue;
 
       const customerName = order.customer
         ? [order.customer.first_name, order.customer.last_name].filter(Boolean).join(' ')
         : (order.billing_address?.name || null);
 
+      const commonFields = {
+        shopify_order_id:     String(order.id),
+        order_number:         order.order_number ? String(order.order_number) : null,
+        order_name:           order.name || null,
+        customer_name:        customerName || null,
+        order_date:           orderDate,
+        store,
+        fulfillment_location: assignedLocation,
+      };
+
       for (const [sku, d] of Object.entries(bySku)) {
         salesRecords.push({
-          shopify_order_id:     String(order.id),
-          order_number:         order.order_number ? String(order.order_number) : null,
-          order_name:           order.name || null,
-          customer_name:        customerName || null,
+          ...commonFields,
           sku,
           product_name:         d.product_name,
           quantity_sold:        d.qty,
           sale_price:           Math.round((d.revenue / d.qty) * 100) / 100,
-          order_date:           orderDate,
-          store,
-          fulfillment_location: assignedLocation,
+        });
+      }
+
+      // Shipping row
+      const shippingTotal = (order.shipping_lines || [])
+        .reduce((sum, sl) => sum + (parseFloat(sl.discounted_price ?? sl.price) || 0), 0);
+      if (shippingTotal > 0) {
+        salesRecords.push({
+          ...commonFields,
+          sku:           'shipping',
+          product_name:  'Shipping Charge',
+          quantity_sold: 1,
+          sale_price:    Math.round(shippingTotal * 100) / 100,
+        });
+      }
+
+      // Tax row
+      const taxTotal = parseFloat(order.total_tax || '0') || 0;
+      if (taxTotal > 0) {
+        salesRecords.push({
+          ...commonFields,
+          sku:           'tax',
+          product_name:  'Tax Collected',
+          quantity_sold: 1,
+          sale_price:    Math.round(taxTotal * 100) / 100,
         });
       }
     }
