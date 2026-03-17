@@ -773,8 +773,15 @@ textarea { resize: vertical; min-height: 70px; }
 .dash-range-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 0;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.dash-range-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -806,6 +813,47 @@ textarea { resize: vertical; min-height: 70px; }
   color: var(--accent-deep);
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(201, 168, 76, 0.18);
+}
+
+.dash-range-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  margin: 0 14px;
+  flex-shrink: 0;
+}
+
+.dash-range-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash-range-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.dash-range-input {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-body);
+  padding: 6px 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  width: 140px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-shadow: var(--shadow-xs);
+}
+
+.dash-range-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
 }
 
 /* ===== Responsive ===== */

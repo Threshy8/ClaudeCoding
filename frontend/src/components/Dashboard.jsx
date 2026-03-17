@@ -115,17 +115,46 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
 
   return (
     <div>
-      {/* Date range preset buttons */}
+      {/* Date range preset buttons + custom date inputs */}
       <div className="dash-range-bar">
-        {presets.map((p) => (
-          <button
-            key={p.label}
-            className={`dash-range-btn${dateRange.label === p.label ? ' dash-range-active' : ''}`}
-            onClick={() => onDateRangeChange({ start: p.start, end: p.end, label: p.label })}
-          >
-            {p.label}
-          </button>
-        ))}
+        <div className="dash-range-presets">
+          {presets.map((p) => (
+            <button
+              key={p.label}
+              className={`dash-range-btn${dateRange.label === p.label ? ' dash-range-active' : ''}`}
+              onClick={() => onDateRangeChange({ start: p.start, end: p.end, label: p.label })}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="dash-range-divider" />
+        <div className="dash-range-custom">
+          <label className="dash-range-label">From</label>
+          <input
+            type="date"
+            className="dash-range-input"
+            value={dateRange.start || ''}
+            onChange={(e) => {
+              const start = e.target.value;
+              if (start && dateRange.end && start <= dateRange.end) {
+                onDateRangeChange({ start, end: dateRange.end, label: 'Custom' });
+              }
+            }}
+          />
+          <label className="dash-range-label">To</label>
+          <input
+            type="date"
+            className="dash-range-input"
+            value={dateRange.end || ''}
+            onChange={(e) => {
+              const end = e.target.value;
+              if (end && dateRange.start && end >= dateRange.start) {
+                onDateRangeChange({ start: dateRange.start, end, label: 'Custom' });
+              }
+            }}
+          />
+        </div>
       </div>
 
       <div className="kpi-grid">
