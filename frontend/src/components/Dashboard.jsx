@@ -14,13 +14,56 @@ function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 }).format(n || 0);
 }
 
-export default function Dashboard({ dateRange }) {
+function toIso(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function buildDashboardPresets() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const today = toIso(now);
+  const pad = (n) => String(n).padStart(2, '0');
+
+  // Monday of this week
+  const dayOfWeek = (now.getDay() + 6) % 7; // 0 = Monday
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - dayOfWeek);
+  const weekStart = toIso(monday);
+
+  const thisMonthStart = `${y}-${pad(m + 1)}-01`;
+
+  const lastM = m === 0 ? 11 : m - 1;
+  const lastY = m === 0 ? y - 1 : y;
+  const lastMonthStart = `${lastY}-${pad(lastM + 1)}-01`;
+  const lastMonthEnd = toIso(new Date(y, m, 0));
+
+  const l3m = m - 2;
+  const l3y = l3m < 0 ? y - 1 : y;
+  const l3mAdj = ((l3m % 12) + 12) % 12;
+  const last3Start = `${l3y}-${pad(l3mAdj + 1)}-01`;
+
+  const thisYearStart = `${y}-01-01`;
+
+  return [
+    { label: 'Today',         start: today,          end: today },
+    { label: 'This Week',     start: weekStart,      end: today },
+    { label: 'This Month',    start: thisMonthStart, end: today },
+    { label: 'Last Month',    start: lastMonthStart, end: lastMonthEnd },
+    { label: 'Last 3 Months', start: last3Start,     end: lastMonthEnd },
+    { label: 'This Year',     start: thisYearStart,  end: today },
+  ];
+}
+
+export default function Dashboard({ dateRange, onDateRangeChange }) {
   const [skuData, setSkuData] = useState(null);
   const [inventory, setInventory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isFifo, setIsFifo] = useState(false);
   const { mc, mn, mp } = useDemoMask();
+
+  const presets = buildDashboardPresets();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -72,11 +115,24 @@ export default function Dashboard({ dateRange }) {
 
   return (
     <div>
+      {/* Date range preset buttons */}
+      <div className="dash-range-bar">
+        {presets.map((p) => (
+          <button
+            key={p.label}
+            className={`dash-range-btn${dateRange.label === p.label ? ' dash-range-active' : ''}`}
+            onClick={() => onDateRangeChange({ start: p.start, end: p.end, label: p.label })}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-label">Revenue</div>
           <div className="kpi-value">{mc(_fmt(totalCollected))}</div>
-          <div className="kpi-sub">This Month</div>
+          <div className="kpi-sub">{rangeLabel}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">True COGS</div>
