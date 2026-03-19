@@ -20,7 +20,7 @@ function fmtDate(d) {
 
 function _fmt(n) {
   if (n == null) return '—';
-  return '$' + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n));
 }
 
 function daysBetween(d1, d2) {

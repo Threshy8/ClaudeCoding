@@ -4,7 +4,7 @@ import { triggerLabel } from './DateRangePicker';
 import { useDemoMask } from '../contexts/DemoModeContext';
 
 function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(n || 0);
+  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 }
 
 function downloadCsv(content, filename) {
