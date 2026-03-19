@@ -293,6 +293,65 @@ router.post('/shopify', async (req, res) => {
       }
     }
 
+    // ── Pass 3: Redo resend returns ────────────────────────────────────────────
+    // Redo creates $0 resend orders (e.g. "#6084-RESEND") for exchanges. When the
+    // customer returns the original item, Redo closes the resend order. Shopify
+    // Analytics counts this as a "Return" on the closure date, but the Orders API
+    // has no refund object (since the resend was $0). We detect these by looking
+    // for closed resend orders with a Redo exchange note, then record a return
+    // using the average sale price of the SKU from the current sync batch.
+    //
+    // Build a lookup of average sale price per SKU from Pass 1 sales records.
+    const skuAvgPrice = {};
+    for (const sr of salesRecords) {
+      if (['x-redo', 'shipping', 'tax'].includes(sr.sku)) continue;
+      if (!skuAvgPrice[sr.sku]) skuAvgPrice[sr.sku] = { total: 0, qty: 0 };
+      skuAvgPrice[sr.sku].total += sr.sale_price * sr.quantity_sold;
+      skuAvgPrice[sr.sku].qty += sr.quantity_sold;
+    }
+
+    for (const order of orders) {
+      if (order.test) continue;
+      if (order.currency !== 'AUD') continue;
+      if (!order.closed_at) continue;
+      // Identify Redo resend orders: $0 total + note mentioning Redo exchange
+      if (parseFloat(order.total_price) !== 0) continue;
+      const note = order.note || '';
+      if (!note.includes('exchange order generated from Redo')) continue;
+
+      const closedDate = toStoreDate(order.closed_at);
+      const orderDate = toStoreDate(order.created_at);
+
+      for (const li of (order.line_items || [])) {
+        const sku = li.sku || `NO-SKU-${li.product_id}`;
+        const qty = li.quantity || 0;
+        if (qty <= 0) continue;
+
+        // Determine return value: use average sale price of this SKU
+        const avg = skuAvgPrice[sku];
+        const unitPrice = avg && avg.qty > 0 ? avg.total / avg.qty : 0;
+        if (unitPrice <= 0) {
+          console.log(`[Redo Return] Skipping ${order.name} sku=${sku}: no sale price data to value the return`);
+          continue;
+        }
+
+        const subtotal = Math.round(unitPrice * qty * 100) / 100;
+        refundRecords.push({
+          shopify_order_id:  String(order.id),
+          order_number:      order.order_number ? String(order.order_number) : null,
+          shopify_refund_id: `redo-return-${order.id}`,
+          sku,
+          product_name:      li.title || li.name || 'Unknown',
+          quantity_refunded: qty,
+          refund_subtotal:   subtotal,
+          order_date:        orderDate,
+          refund_date:       closedDate,
+          store,
+        });
+        console.log(`[Redo Return] ${order.name} sku=${sku} qty=${qty} value=$${subtotal} return_date=${closedDate}`);
+      }
+    }
+
     // ── Persist sales + refunds ───────────────────────────────────────────────
     await supabase.from('shopify_sales').delete().eq('store', store);
     await supabase.from('shopify_refunds').delete().eq('store', store);
