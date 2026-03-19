@@ -103,7 +103,9 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   }
 
   // Merge period refunds into periodSkuMap so cross-period returns create entries too
+  // (skip virtual SKUs — shipping/redo/tax refunds are handled separately in the breakdown)
   for (const [sku, r] of Object.entries(periodRefundMap)) {
+    if (['shipping', 'x-redo', 'tax'].includes(sku)) continue;
     if (!periodSkuMap[sku]) {
       periodSkuMap[sku] = { product_name: r.product_name, gross_units: 0, gross_revenue: 0 };
     }
@@ -186,9 +188,16 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   // Discount breakdown is not stored separately in shopify_sales.
   const grossSales = Object.values(periodSkuMap).reduce((s, d) => s + d.gross_revenue, 0);
   const totalDiscounts = 0; // Already baked into sale_price during sync
-  const totalReturns = Object.values(periodRefundMap).reduce((s, d) => s + d.subtotal, 0);
+
+  // Split refunds: product returns vs shipping/virtual SKU refunds
+  const virtualRefundSkus = ['shipping', 'x-redo', 'tax'];
+  const totalReturns = Object.entries(periodRefundMap)
+    .filter(([sku]) => !virtualRefundSkus.includes(sku))
+    .reduce((s, [, d]) => s + d.subtotal, 0);
+  const shippingRefunds = (periodRefundMap['shipping'] || { subtotal: 0 }).subtotal;
+
   const netSales = grossSales - totalReturns;
-  const shippingRevenue = shippingTotal;
+  const shippingRevenue = shippingTotal - shippingRefunds;
   const totalCollected = netSales + shippingRevenue + redoFees;
 
   // --- Totals ---
@@ -614,9 +623,13 @@ router.get('/entries/by-sku', async (req, res) => {
     // Sales breakdown — same note: sale_price is net of discounts from sync
     const grossSales = Object.values(skuMap).reduce((s, d) => s + d.revenue, 0);
     const totalDiscounts = 0; // Already baked into sale_price during sync
-    const totalReturns = Object.values(refundMap).reduce((s, d) => s + d.subtotal, 0);
+    const virtualRefundSkus = ['shipping', 'x-redo', 'tax'];
+    const totalReturns = Object.entries(refundMap)
+      .filter(([sku]) => !virtualRefundSkus.includes(sku))
+      .reduce((s, [, d]) => s + d.subtotal, 0);
+    const shippingRefunds = (refundMap['shipping'] || { subtotal: 0 }).subtotal;
     const netSales = grossSales - totalReturns;
-    const shippingRevenue = shippingTotal;
+    const shippingRevenue = shippingTotal - shippingRefunds;
     const totalCollected = netSales + shippingRevenue + redoFees;
 
     const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
@@ -625,7 +638,7 @@ router.get('/entries/by-sku', async (req, res) => {
 
     res.json({
       period: `${start_date} – ${end_date}`,
-      total_revenue: Math.round((totalRevenue + redoFees + shippingTotal) * 100) / 100,
+      total_revenue: Math.round((totalRevenue + redoFees + shippingRevenue) * 100) / 100,
       total_cogs: Math.round(totalCogs * 100) / 100,
       total_inventory_value: Math.round(totalInvValue * 100) / 100,
       gross_margin_pct: totalRevenue > 0 ? Math.round((totalRevenue - totalCogs) / totalRevenue * 10000) / 100 : 0,

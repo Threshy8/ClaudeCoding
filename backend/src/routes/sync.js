@@ -290,6 +290,25 @@ router.post('/shopify', async (req, res) => {
             store,
           });
         }
+
+        // Capture shipping refunds from order_adjustments
+        const shippingRefund = (refund.order_adjustments || [])
+          .filter(a => a.kind === 'shipping_refund')
+          .reduce((s, a) => s + Math.abs(parseFloat(a.amount || 0)), 0);
+        if (shippingRefund > 0) {
+          refundRecords.push({
+            shopify_order_id:  String(order.id),
+            order_number:      order.order_number ? String(order.order_number) : null,
+            shopify_refund_id: `${refund.id}-shipping`,
+            sku:               'shipping',
+            product_name:      'Shipping Refund',
+            quantity_refunded: 1,
+            refund_subtotal:   Math.round(shippingRefund * 100) / 100,
+            order_date:        orderDate,
+            refund_date:       refundDate,
+            store,
+          });
+        }
       }
     }
 
