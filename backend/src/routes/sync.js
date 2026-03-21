@@ -317,17 +317,42 @@ router.post('/shopify', async (req, res) => {
     // customer returns the original item, Redo closes the resend order. Shopify
     // Analytics counts this as a "Return" on the closure date, but the Orders API
     // has no refund object (since the resend was $0). We detect these by looking
-    // for closed resend orders with a Redo exchange note, then record a return
-    // using the average sale price of the SKU from the current sync batch.
-    //
-    // Build a lookup of average sale price per SKU from Pass 1 sales records.
-    const skuAvgPrice = {};
-    for (const sr of salesRecords) {
-      if (['x-redo', 'shipping', 'tax'].includes(sr.sku)) continue;
-      if (!skuAvgPrice[sr.sku]) skuAvgPrice[sr.sku] = { total: 0, qty: 0 };
-      skuAvgPrice[sr.sku].total += sr.sale_price * sr.quantity_sold;
-      skuAvgPrice[sr.sku].qty += sr.quantity_sold;
+    // for closed resend orders with a Redo exchange note, then value the return
+    // using the actual sale price from the original order.
+
+    // Build order-name lookup from already-fetched orders (for recent originals)
+    const orderByName = {};
+    for (const o of orders) {
+      if (o.name) orderByName[o.name] = o;
     }
+
+    // Build product price lookup (current list price) as fallback for old orders
+    // that are no longer accessible via the API.
+    const productPriceMap = {};
+    try {
+      let prodUrl = `${storeUrl.replace(/\/$/, '')}/admin/api/2024-01/products.json?limit=250`;
+      while (prodUrl) {
+        const prodRes = await axios.get(prodUrl, {
+          headers: { 'X-Shopify-Access-Token': token },
+        });
+        for (const p of prodRes.data.products) {
+          for (const v of p.variants) {
+            if (v.sku) productPriceMap[v.sku] = parseFloat(v.price) || 0;
+          }
+        }
+        const linkHeader = prodRes.headers['link'];
+        if (linkHeader && linkHeader.includes('rel="next"')) {
+          const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+          prodUrl = match ? match[1] : null;
+        } else {
+          prodUrl = null;
+        }
+      }
+    } catch (err) {
+      console.log(`[Redo Return] Could not fetch product prices: ${err.message}`);
+    }
+
+    const base = storeUrl.replace(/\/$/, '');
 
     for (const order of orders) {
       if (order.test) continue;
@@ -341,16 +366,54 @@ router.post('/shopify', async (req, res) => {
       const closedDate = toStoreDate(order.closed_at);
       const orderDate = toStoreDate(order.created_at);
 
+      // Parse original order name from note (e.g. "for order #6084")
+      const origMatch = note.match(/for order (#\d+)/);
+      let originalOrder = null;
+      if (origMatch) {
+        const origName = origMatch[1]; // e.g. "#6084"
+        // Try already-fetched orders first
+        originalOrder = orderByName[origName];
+        // If not in fetched batch (e.g. older than sync window), try API
+        if (!originalOrder) {
+          try {
+            const origRes = await axios.get(
+              `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(origName)}&status=any&limit=5`,
+              { headers: { 'X-Shopify-Access-Token': token } }
+            );
+            originalOrder = (origRes.data.orders || []).find(o => o.name === origName);
+          } catch (err) {
+            console.log(`[Redo Return] Could not fetch original order ${origName}: ${err.message}`);
+          }
+        }
+      }
+
+      // Build price lookup from original order's line items (actual price paid)
+      const origPriceMap = {};
+      if (originalOrder) {
+        for (const oli of (originalOrder.line_items || [])) {
+          const oSku = oli.sku || `NO-SKU-${oli.product_id}`;
+          const oQty = oli.quantity || 0;
+          if (oQty <= 0) continue;
+          const disc = (oli.discount_allocations || [])
+            .reduce((s, da) => s + (parseFloat(da.amount) || 0), 0);
+          origPriceMap[oSku] = Math.round(((parseFloat(oli.price) * oQty - disc) / oQty) * 100) / 100;
+        }
+      }
+
       for (const li of (order.line_items || [])) {
         const sku = li.sku || `NO-SKU-${li.product_id}`;
         const qty = li.quantity || 0;
         if (qty <= 0) continue;
 
-        // Determine return value: use average sale price of this SKU
-        const avg = skuAvgPrice[sku];
-        const unitPrice = avg && avg.qty > 0 ? avg.total / avg.qty : 0;
+        // Priority: original order's actual price > current product list price
+        let unitPrice = origPriceMap[sku] || 0;
+        let priceSource = 'original order';
+        if (unitPrice <= 0 && productPriceMap[sku]) {
+          unitPrice = productPriceMap[sku];
+          priceSource = 'current list price';
+        }
         if (unitPrice <= 0) {
-          console.log(`[Redo Return] Skipping ${order.name} sku=${sku}: no sale price data to value the return`);
+          console.log(`[Redo Return] Skipping ${order.name} sku=${sku}: could not determine sale price`);
           continue;
         }
 
@@ -367,7 +430,7 @@ router.post('/shopify', async (req, res) => {
           refund_date:       closedDate,
           store,
         });
-        console.log(`[Redo Return] ${order.name} sku=${sku} qty=${qty} value=$${subtotal} return_date=${closedDate}`);
+        console.log(`[Redo Return] ${order.name} sku=${sku} qty=${qty} value=$${subtotal} (${priceSource}) return_date=${closedDate}`);
       }
     }
 
