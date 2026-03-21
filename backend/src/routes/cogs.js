@@ -37,7 +37,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   // 4. Get gross sales for the period (by order_date)
   const { data: periodSales, error: periodSalesError } = await supabase
     .from('shopify_sales')
-    .select('sku, product_name, quantity_sold, sale_price, order_date')
+    .select('sku, product_name, quantity_sold, sale_price, line_revenue, order_date')
     .gte('order_date', periodStart)
     .lt('order_date', periodEnd)
     .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
@@ -99,7 +99,9 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       periodSkuMap[s.sku] = { product_name: s.product_name, gross_units: 0, gross_revenue: 0 };
     }
     periodSkuMap[s.sku].gross_units += s.quantity_sold;
-    periodSkuMap[s.sku].gross_revenue += s.quantity_sold * parseFloat(s.sale_price);
+    periodSkuMap[s.sku].gross_revenue += s.line_revenue != null
+      ? parseFloat(s.line_revenue)
+      : s.quantity_sold * parseFloat(s.sale_price);
   }
 
   // Merge period refunds into periodSkuMap so cross-period returns create entries too
@@ -844,7 +846,7 @@ router.get('/forecast/revenue', async (req, res) => {
 
     const { data: sales, error: sErr } = await supabase
       .from('shopify_sales')
-      .select('order_date, quantity_sold, sale_price')
+      .select('order_date, quantity_sold, sale_price, line_revenue')
       .gte('order_date', ninetyAgo)
       .lte('order_date', today)
       .eq('store', store)
@@ -855,7 +857,8 @@ router.get('/forecast/revenue', async (req, res) => {
     const dailyMap = {};
     for (const s of (sales || [])) {
       const d = s.order_date;
-      dailyMap[d] = (dailyMap[d] || 0) + (s.quantity_sold || 0) * parseFloat(s.sale_price || 0);
+      const rev = s.line_revenue != null ? parseFloat(s.line_revenue) : (s.quantity_sold || 0) * parseFloat(s.sale_price || 0);
+      dailyMap[d] = (dailyMap[d] || 0) + rev;
     }
 
     // Fill all 90 days (including zero-revenue days)
@@ -1016,7 +1019,7 @@ router.get('/forecast/peak-period', async (req, res) => {
     // Get sales during the peak period
     const { data: sales, error: sErr } = await supabase
       .from('shopify_sales')
-      .select('sku, product_name, quantity_sold, sale_price, order_date')
+      .select('sku, product_name, quantity_sold, sale_price, line_revenue, order_date')
       .gte('order_date', period_start)
       .lte('order_date', period_end)
       .eq('store', store)
@@ -1031,7 +1034,7 @@ router.get('/forecast/peak-period', async (req, res) => {
 
     for (const s of (sales || [])) {
       const qty = s.quantity_sold || 0;
-      const rev = qty * parseFloat(s.sale_price || 0);
+      const rev = s.line_revenue != null ? parseFloat(s.line_revenue) : qty * parseFloat(s.sale_price || 0);
       totalRevenue += rev;
       totalUnits += qty;
 

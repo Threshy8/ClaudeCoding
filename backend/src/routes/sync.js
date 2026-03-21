@@ -217,12 +217,14 @@ router.post('/shopify', async (req, res) => {
       };
 
       for (const [sku, d] of Object.entries(bySku)) {
+        const lineRevenue = Math.round(d.revenue * 100) / 100;
         salesRecords.push({
           ...commonFields,
           sku,
           product_name:         d.product_name,
           quantity_sold:        d.qty,
           sale_price:           Math.round((d.revenue / d.qty) * 100) / 100,
+          line_revenue:         lineRevenue,
         });
       }
 
@@ -230,12 +232,14 @@ router.post('/shopify', async (req, res) => {
       const shippingTotal = (order.shipping_lines || [])
         .reduce((sum, sl) => sum + (parseFloat(sl.discounted_price ?? sl.price) || 0), 0);
       if (shippingTotal > 0) {
+        const shippingRounded = Math.round(shippingTotal * 100) / 100;
         salesRecords.push({
           ...commonFields,
           sku:           'shipping',
           product_name:  'Shipping Charge',
           quantity_sold: 1,
-          sale_price:    Math.round(shippingTotal * 100) / 100,
+          sale_price:    shippingRounded,
+          line_revenue:  shippingRounded,
         });
       }
 

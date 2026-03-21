@@ -49,6 +49,7 @@ create table if not exists shopify_sales (
   product_name     text not null,
   quantity_sold    integer not null check (quantity_sold > 0),
   sale_price       numeric(12, 2) not null,
+  line_revenue     numeric(12, 2),          -- exact line total (qty × price − discount), avoids rounding from sale_price × qty
   order_date       date not null,
   store            text not null default 'au',  -- 'au' or 'us'
   synced_at        timestamptz default now(),
