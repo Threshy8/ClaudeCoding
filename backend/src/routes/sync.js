@@ -521,6 +521,39 @@ router.post('/shopify', async (req, res) => {
   }
 });
 
+// GET /api/sync/raw-order?order=7129 — dump full raw Shopify order JSON
+// Temporary debug endpoint. Remove after use.
+router.get('/raw-order', async (req, res) => {
+  const orderNum = req.query.order;
+  if (!orderNum) return res.status(400).json({ error: 'Pass ?order=7129' });
+
+  const storeUrl = process.env.SHOPIFY_STORE_URL;
+  const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+  const clientId = process.env.SHOPIFY_CLIENT_ID;
+  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+
+  let token;
+  try {
+    token = await getAccessToken('au', storeUrl, accessToken, clientId, clientSecret);
+  } catch (err) {
+    return res.status(500).json({ error: 'Could not get Shopify token: ' + err.message });
+  }
+
+  const base = storeUrl.replace(/\/$/, '');
+  const orderName = `#${orderNum}`;
+  try {
+    const apiRes = await axios.get(
+      `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(orderName)}&status=any&limit=5`,
+      { headers: { 'X-Shopify-Access-Token': token } }
+    );
+    const order = (apiRes.data.orders || []).find(o => o.name === orderName);
+    if (!order) return res.status(404).json({ error: `Order ${orderName} not found` });
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/sync/lookup-redo-orders — one-off utility to find original order
 // numbers for Redo resend orders. Returns UPDATE SQL for shopify_refunds.
 // Remove this endpoint after running.
