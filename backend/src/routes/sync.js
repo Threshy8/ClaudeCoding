@@ -521,4 +521,79 @@ router.post('/shopify', async (req, res) => {
   }
 });
 
+// GET /api/sync/lookup-redo-orders — one-off utility to find original order
+// numbers for Redo resend orders. Returns UPDATE SQL for shopify_refunds.
+// Remove this endpoint after running.
+router.get('/lookup-redo-orders', async (req, res) => {
+  const phantomNumbers = (req.query.orders || '').split(',').filter(Boolean);
+  if (phantomNumbers.length === 0) {
+    return res.status(400).json({ error: 'Pass ?orders=7129,7188,...' });
+  }
+
+  const storeUrl = process.env.SHOPIFY_STORE_URL;
+  const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+  const clientId = process.env.SHOPIFY_CLIENT_ID;
+  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+
+  let token;
+  try {
+    token = await getAccessToken('au', storeUrl, accessToken, clientId, clientSecret);
+  } catch (err) {
+    return res.status(500).json({ error: 'Could not get Shopify token: ' + err.message });
+  }
+
+  const base = storeUrl.replace(/\/$/, '');
+  const results = [];
+
+  for (const orderNum of phantomNumbers) {
+    const orderName = `#${orderNum}`;
+    try {
+      const apiRes = await axios.get(
+        `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(orderName)}&status=any&limit=5`,
+        { headers: { 'X-Shopify-Access-Token': token } }
+      );
+      const order = (apiRes.data.orders || []).find(o => o.name === orderName);
+      if (!order) {
+        results.push({ order_number: orderNum, status: 'not_found' });
+        continue;
+      }
+
+      let origOrderNumber = null;
+      const redoAttr = (order.note_attributes || []).find(a => a.name === '_redo_original_order');
+      if (redoAttr && redoAttr.value) {
+        origOrderNumber = String(redoAttr.value).replace(/^#/, '');
+      }
+      if (!origOrderNumber) {
+        const note = order.note || '';
+        const match = note.match(/for order #(\d+)/);
+        if (match) origOrderNumber = match[1];
+      }
+
+      results.push({
+        order_number: orderNum,
+        original_order: origOrderNumber || null,
+        note: (order.note || '').substring(0, 120),
+        note_attributes: order.note_attributes || [],
+        sql: origOrderNumber
+          ? `UPDATE shopify_refunds SET order_number = '${origOrderNumber}' WHERE order_number = '${orderNum}';`
+          : null,
+      });
+
+      // Rate limit
+      await new Promise(r => setTimeout(r, 500));
+    } catch (err) {
+      results.push({ order_number: orderNum, status: 'error', message: err.message });
+    }
+  }
+
+  const sqlStatements = results.filter(r => r.sql).map(r => r.sql);
+
+  res.json({
+    results,
+    sql: sqlStatements.length > 0
+      ? '-- Fix Redo refund order numbers in shopify_refunds\n-- Run in: Supabase Dashboard → SQL Editor\n\n' + sqlStatements.join('\n')
+      : '-- No updates needed',
+  });
+});
+
 module.exports = router;
