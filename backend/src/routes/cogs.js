@@ -521,19 +521,22 @@ router.get('/entries/by-sku', async (req, res) => {
     if (eErr) return res.status(500).json({ error: eErr.message });
     if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0, shipping_total: 0, tax_total: 0, gross_sales: 0, total_discounts: 0, total_returns: 0, net_sales: 0, shipping_revenue: 0, total_collected: 0 });
 
-    // Group by SKU
+    // Helper: convert a dollar value to integer cents
+    const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
+
+    // Group by SKU — accumulate revenue in integer cents
     const skuMap = {};
     for (const e of entries) {
       if (!skuMap[e.sku]) {
-        skuMap[e.sku] = { sku: e.sku, product_name: e.product_name, units_sold: 0, revenue: 0, cogs: 0, purchase_cost: 0, gd_shipping: 0, scc_handling: 0 };
+        skuMap[e.sku] = { sku: e.sku, product_name: e.product_name, units_sold: 0, revenueCents: 0, cogsCents: 0, purchaseCostCents: 0, gdShippingCents: 0, sccHandlingCents: 0 };
       }
       const qty = e.quantity_sold || 0;
       skuMap[e.sku].units_sold += qty;
-      skuMap[e.sku].revenue += qty * parseFloat(e.sale_price || 0);
-      skuMap[e.sku].cogs += qty * parseFloat(e.total_unit_cogs || 0);
-      skuMap[e.sku].purchase_cost += qty * parseFloat(e.unit_purchase_cost || 0);
-      skuMap[e.sku].gd_shipping += qty * parseFloat(e.unit_gd_shipping || 0);
-      skuMap[e.sku].scc_handling += qty * parseFloat(e.unit_scc_handling || 0);
+      skuMap[e.sku].revenueCents += toCents(e.sale_price) * qty;
+      skuMap[e.sku].cogsCents += toCents(e.total_unit_cogs) * qty;
+      skuMap[e.sku].purchaseCostCents += toCents(e.unit_purchase_cost) * qty;
+      skuMap[e.sku].gdShippingCents += toCents(e.unit_gd_shipping) * qty;
+      skuMap[e.sku].sccHandlingCents += toCents(e.unit_scc_handling) * qty;
     }
 
     // Get inventory on-hand from WAC data (purchases − all-time net sold)
@@ -543,9 +546,9 @@ router.get('/entries/by-sku', async (req, res) => {
 
     const purchaseMap = {};
     for (const p of (allPurchases || [])) {
-      if (!purchaseMap[p.sku]) purchaseMap[p.sku] = { totalQty: 0, totalCost: 0 };
+      if (!purchaseMap[p.sku]) purchaseMap[p.sku] = { totalQty: 0, totalCostCents: 0 };
       purchaseMap[p.sku].totalQty += p.quantity;
-      purchaseMap[p.sku].totalCost += p.quantity * parseFloat(p.unit_cost);
+      purchaseMap[p.sku].totalCostCents += toCents(p.unit_cost) * p.quantity;
     }
     const allTimeSold = {};
     for (const s of (allSales || [])) allTimeSold[s.sku] = (allTimeSold[s.sku] || 0) + s.quantity_sold;
@@ -561,43 +564,45 @@ router.get('/entries/by-sku', async (req, res) => {
 
     const refundMap = {};
     for (const r of (periodRefunds || [])) {
-      if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotal: 0 };
+      if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotalCents: 0 };
       refundMap[r.sku].qty += r.quantity_refunded;
-      refundMap[r.sku].subtotal += parseFloat(r.refund_subtotal || 0);
+      refundMap[r.sku].subtotalCents += toCents(r.refund_subtotal);
     }
 
     const skuBreakdown = Object.values(skuMap).map(s => {
-      const refund = refundMap[s.sku] || { qty: 0, subtotal: 0 };
+      const refund = refundMap[s.sku] || { qty: 0, subtotalCents: 0 };
       const netUnits = s.units_sold - refund.qty;
-      const netRevenue = s.revenue - refund.subtotal;
+      const netRevenueCents = s.revenueCents - refund.subtotalCents;
+      const netRevenue = netRevenueCents / 100;
       // Scale COGS proportionally for net units
-      const avgUnitCogs = s.units_sold > 0 ? s.cogs / s.units_sold : 0;
-      const netCogs = netUnits * avgUnitCogs;
+      const avgUnitCogsCents = s.units_sold > 0 ? s.cogsCents / s.units_sold : 0;
+      const netCogsCents = Math.round(netUnits * avgUnitCogsCents);
+      const netCogs = netCogsCents / 100;
       const margin = netRevenue > 0 ? ((netRevenue - netCogs) / netRevenue) * 100 : 0;
-      const pm = purchaseMap[s.sku] || { totalQty: 0, totalCost: 0 };
-      const avgCost = pm.totalQty > 0 ? pm.totalCost / pm.totalQty : 0;
+      const pm = purchaseMap[s.sku] || { totalQty: 0, totalCostCents: 0 };
+      const avgCost = pm.totalQty > 0 ? pm.totalCostCents / pm.totalQty / 100 : 0;
       const onHand = Math.max(0, pm.totalQty - (allTimeSold[s.sku] || 0));
       return {
         sku: s.sku,
         product_name: s.product_name,
         units_sold: netUnits,
-        avg_unit_cost: s.units_sold > 0 ? Math.round(s.cogs / s.units_sold * 100) / 100 : 0,
-        revenue: Math.round(netRevenue * 100) / 100,
-        cogs: Math.round(netCogs * 100) / 100,
+        avg_unit_cost: s.units_sold > 0 ? Math.round(s.cogsCents / s.units_sold) / 100 : 0,
+        revenue: netRevenue,
+        cogs: netCogs,
         gross_margin_pct: Math.round(margin * 100) / 100,
         units_on_hand: onHand,
         inventory_value: Math.round(onHand * avgCost * 100) / 100,
         // FIFO cost breakdown
-        purchase_cost: Math.round(s.purchase_cost * 100) / 100,
-        gd_shipping: Math.round(s.gd_shipping * 100) / 100,
-        scc_handling: Math.round(s.scc_handling * 100) / 100,
+        purchase_cost: s.purchaseCostCents / 100,
+        gd_shipping: s.gdShippingCents / 100,
+        scc_handling: s.sccHandlingCents / 100,
       };
     });
 
     // Also add SKUs with inventory but no period sales
     for (const [sku, pm] of Object.entries(purchaseMap)) {
       if (skuMap[sku]) continue;
-      const avgCost = pm.totalQty > 0 ? pm.totalCost / pm.totalQty : 0;
+      const avgCost = pm.totalQty > 0 ? pm.totalCostCents / pm.totalQty / 100 : 0;
       const onHand = Math.max(0, pm.totalQty - (allTimeSold[sku] || 0));
       if (onHand > 0) {
         skuBreakdown.push({
@@ -620,48 +625,50 @@ router.get('/entries/by-sku', async (req, res) => {
       .eq('store', store)
       .in('sku', ['x-redo', 'shipping', 'tax']);
 
-    function _sumV(rows, sku) {
+    function _sumVCents(rows, sku) {
       return (rows || []).filter(r => r.sku === sku)
-        .reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+        .reduce((s, r) => s + toCents(r.sale_price) * (r.quantity_sold || 0), 0);
     }
-    const redoFees = _sumV(virtualRows, 'x-redo');
+    const redoFeesCents = _sumVCents(virtualRows, 'x-redo');
     const redoUnits = (virtualRows || []).filter(r => r.sku === 'x-redo')
       .reduce((s, r) => s + (r.quantity_sold || 0), 0);
-    const shippingTotal = _sumV(virtualRows, 'shipping');
-    const taxTotal = _sumV(virtualRows, 'tax');
+    const shippingTotalCents = _sumVCents(virtualRows, 'shipping');
+    const taxTotalCents = _sumVCents(virtualRows, 'tax');
 
-    // Sales breakdown — same note: sale_price is net of discounts from sync
-    const grossSales = Object.values(skuMap).reduce((s, d) => s + d.revenue, 0);
+    // Sales breakdown — all in integer cents
+    const grossSalesCents = Object.values(skuMap).reduce((s, d) => s + d.revenueCents, 0);
     const totalDiscounts = 0; // Already baked into sale_price during sync
     const virtualRefundSkus = ['shipping', 'x-redo', 'tax'];
-    const totalReturns = Object.entries(refundMap)
+    const totalReturnsCents = Object.entries(refundMap)
       .filter(([sku]) => !virtualRefundSkus.includes(sku))
-      .reduce((s, [, d]) => s + d.subtotal, 0);
-    const shippingRefunds = (refundMap['shipping'] || { subtotal: 0 }).subtotal;
-    const netSales = grossSales - totalReturns;
-    const shippingRevenue = shippingTotal - shippingRefunds;
-    const totalCollected = netSales + shippingRevenue + redoFees;
+      .reduce((s, [, d]) => s + d.subtotalCents, 0);
+    const shippingRefundsCents = (refundMap['shipping'] || { subtotalCents: 0 }).subtotalCents;
+    const netSalesCents = grossSalesCents - totalReturnsCents;
+    const shippingRevenueCents = shippingTotalCents - shippingRefundsCents;
+    const totalCollectedCents = netSalesCents + shippingRevenueCents + redoFeesCents;
 
-    const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
-    const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
+    const totalRevenueCents = skuBreakdown.reduce((s, r) => s + Math.round(r.revenue * 100), 0);
+    const totalCogsCents = skuBreakdown.reduce((s, r) => s + Math.round(r.cogs * 100), 0);
     const totalInvValue = skuBreakdown.reduce((s, r) => s + r.inventory_value, 0);
+    const totalRevenue = totalRevenueCents / 100;
+    const totalCogs = totalCogsCents / 100;
 
     res.json({
       period: `${start_date} – ${end_date}`,
-      total_revenue: Math.round((totalRevenue + redoFees + shippingRevenue) * 100) / 100,
-      total_cogs: Math.round(totalCogs * 100) / 100,
+      total_revenue: (totalRevenueCents + redoFeesCents + shippingRevenueCents) / 100,
+      total_cogs: totalCogs,
       total_inventory_value: Math.round(totalInvValue * 100) / 100,
       gross_margin_pct: totalRevenue > 0 ? Math.round((totalRevenue - totalCogs) / totalRevenue * 10000) / 100 : 0,
-      redo_fees: Math.round(redoFees * 100) / 100,
+      redo_fees: redoFeesCents / 100,
       redo_units: redoUnits,
-      shipping_total: Math.round(shippingTotal * 100) / 100,
-      tax_total: Math.round(taxTotal * 100) / 100,
-      gross_sales: Math.round(grossSales * 100) / 100,
+      shipping_total: shippingTotalCents / 100,
+      tax_total: taxTotalCents / 100,
+      gross_sales: grossSalesCents / 100,
       total_discounts: totalDiscounts,
-      total_returns: Math.round(totalReturns * 100) / 100,
-      net_sales: Math.round(netSales * 100) / 100,
-      shipping_revenue: Math.round(shippingRevenue * 100) / 100,
-      total_collected: Math.round(totalCollected * 100) / 100,
+      total_returns: totalReturnsCents / 100,
+      net_sales: netSalesCents / 100,
+      shipping_revenue: shippingRevenueCents / 100,
+      total_collected: totalCollectedCents / 100,
       sku_breakdown: skuBreakdown,
     });
   } catch (err) {
