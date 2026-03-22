@@ -122,6 +122,7 @@ function ReturnPopover({ details, mc }) {
 export default function Dashboard({ dateRange }) {
   const [skuData, setSkuData] = useState(null);
   const [inventory, setInventory] = useState(null);
+  const [freight, setFreight] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isFifo, setIsFifo] = useState(false);
@@ -161,10 +162,16 @@ export default function Dashboard({ dateRange }) {
 
     const invPromise = apiFetch('/api/inventory/summary?store=au').catch(() => null);
 
-    Promise.all([fifoPromise, invPromise])
-      .then(([sku, inv]) => {
+    const freightParams = new URLSearchParams();
+    if (dateRange.start) freightParams.set('start_date', dateRange.start);
+    if (dateRange.end)   freightParams.set('end_date', dateRange.end);
+    const freightPromise = apiFetch(`/api/3pl/auspost/summary?${freightParams}`).catch(() => null);
+
+    Promise.all([fifoPromise, invPromise, freightPromise])
+      .then(([sku, inv, freight]) => {
         setSkuData(sku);
         setInventory(inv);
+        setFreight(freight);
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -187,8 +194,9 @@ export default function Dashboard({ dateRange }) {
   const redoFees = skuData.redo_fees || 0;
   const totalCollected = skuData.total_collected || 0;
   const totalCogs = rows.reduce((s, r) => s + (r.cogs || 0), 0);
+  const shippingCosts = freight?.total_cost || 0;
   const netProductRevenue = grossSales - totalReturns;
-  const grossProfit = netProductRevenue - totalCogs;
+  const grossProfit = netProductRevenue - totalCogs - shippingCosts;
   const margin = netProductRevenue > 0 ? Math.round(grossProfit / netProductRevenue * 100) : null;
   const marginClass = margin == null ? '' : margin >= 30 ? 'green' : margin >= 10 ? 'accent' : 'red';
 
@@ -236,7 +244,7 @@ export default function Dashboard({ dateRange }) {
         <div className="kpi-card">
           <div className="kpi-label">Gross Margin</div>
           <div className={`kpi-value ${marginClass}`}>{margin != null && hasCostData ? mp(margin) : '—'}</div>
-          <div className="kpi-sub">(Revenue − COGS) / Revenue</div>
+          <div className="kpi-sub">{shippingCosts > 0 ? '(Rev − COGS − Shipping) / Rev' : '(Revenue − COGS) / Revenue'}</div>
         </div>
       </div>
 
@@ -270,6 +278,29 @@ export default function Dashboard({ dateRange }) {
             <span className="sb-label">Total Collected</span>
             <span className="sb-value">{mc(_fmt(totalCollected))}</span>
           </div>
+          {(hasCostData || shippingCosts > 0) && (
+            <>
+              {hasCostData && (
+                <div className="sb-row sb-negative" style={{ marginTop: 8 }}>
+                  <span className="sb-label">COGS</span>
+                  <span className="sb-value">−{mc(_fmt(totalCogs))}</span>
+                </div>
+              )}
+              {shippingCosts > 0 && (
+                <div className="sb-row sb-negative">
+                  <span className="sb-label">Outbound Shipping (AusPost)</span>
+                  <span className="sb-value">−{mc(_fmt(shippingCosts))}</span>
+                </div>
+              )}
+              <div className="sb-row sb-total">
+                <span className="sb-label">True Margin</span>
+                <span className="sb-value" style={{ color: grossProfit >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                  {mc(_fmt(grossProfit))}
+                  {margin != null && <span style={{ fontSize: 12, fontWeight: 500, marginLeft: 6, opacity: 0.7 }}>({mp(margin)})</span>}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
-import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
+import { BASE_URL, apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
 const CATEGORY_COLOR  = { inbound: '#3b82f6', outbound: '#f59e0b', delivery: '#06b6d4', other: '#8b5cf6' };
 const CATEGORY_LABEL  = { inbound: 'Inbound',  outbound: 'Outbound', delivery: 'Delivery', other: 'Other'  };
@@ -8,13 +8,13 @@ const COST_TYPE_COLOR = { variable: '#10b981', fixed: '#6b7280' };
 const COST_TYPE_LABEL = { variable: 'Variable', fixed: 'Fixed' };
 
 export default function FulfillmentTab({ dateRange }) {
-  const [view, setView] = useState('invoices'); // 'invoices' | 'costsheet'
+  const [view, setView] = useState('invoices'); // 'invoices' | 'costsheet' | 'auspost'
 
   return (
     <div>
       {/* Sub-nav */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-        {[['invoices', '📋 Invoices'], ['costsheet', '📊 Order Cost Sheet']].map(([key, label]) => (
+        {[['invoices', 'Invoices'], ['costsheet', 'Order Cost Sheet'], ['auspost', 'Australia Post']].map(([key, label]) => (
           <button
             key={key}
             onClick={() => setView(key)}
@@ -36,6 +36,7 @@ export default function FulfillmentTab({ dateRange }) {
 
       {view === 'invoices'   && <InvoicesView   dateRange={dateRange} />}
       {view === 'costsheet'  && <CostSheetView  dateRange={dateRange} />}
+      {view === 'auspost'    && <AusPostView    dateRange={dateRange} />}
     </div>
   );
 }
@@ -849,6 +850,201 @@ function LineItemsTable({ items }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── Australia Post View ─────────────────────────────────────────────────────
+function AusPostView({ dateRange }) {
+  const [summary, setSummary] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const fileRef = useRef();
+  const { mc, mn } = useDemoMask();
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (dateRange?.start) params.set('start_date', dateRange.start);
+      if (dateRange?.end)   params.set('end_date', dateRange.end);
+      const [summaryData, recordsData] = await Promise.all([
+        apiFetch(`/api/3pl/auspost/summary?${params}`),
+        apiFetch(`/api/3pl/auspost/records?${params}&limit=200`),
+      ]);
+      setSummary(summaryData);
+      setRecords(recordsData.records || []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }, [dateRange]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true); setUploadResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${BASE_URL}/api/3pl/auspost`, { method: 'POST', body: formData });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Upload failed'); }
+      const result = await res.json();
+      setUploadResult({ type: 'success', text: `Imported ${result.imported} consignments${result.skipped ? ` (${result.skipped} skipped)` : ''}.` });
+      load();
+    } catch (err) { setUploadResult({ type: 'error', text: err.message }); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
+
+  const handleClearAll = async () => {
+    if (!window.confirm('Delete ALL Australia Post freight records? This cannot be undone.')) return;
+    try {
+      await apiFetch('/api/3pl/auspost/all', { method: 'DELETE' });
+      setUploadResult({ type: 'success', text: 'All records deleted.' });
+      load();
+    } catch (err) { setUploadResult({ type: 'error', text: err.message }); }
+  };
+
+  if (loading) return <div className="loading">Loading Australia Post data...</div>;
+  if (error) return <div className="error-msg">{error}</div>;
+
+  return (
+    <div>
+      {/* KPI cards */}
+      {summary && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+          {[
+            { label: 'Total Freight Cost', value: mc(_fmt(summary.total_cost)), sub: `${dateRange?.label || 'Period'}` },
+            { label: 'Consignments', value: mn(summary.consignments), sub: 'Shipments in period' },
+            { label: 'Avg Cost / Shipment', value: mc(_fmt(summary.avg_cost_per_consignment)), sub: 'Including fuel surcharge' },
+            { label: 'Fuel Surcharge', value: mc(_fmt(summary.total_fsc)), sub: 'FSC total' },
+          ].map(({ label, value, sub }) => (
+            <div key={label} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px' }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{value}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{sub}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Service type breakdown */}
+      {summary && summary.by_service && summary.by_service.length > 0 && (
+        <div className="card" style={{ marginBottom: 20, padding: '16px 20px' }}>
+          <div className="card-title" style={{ marginBottom: 10 }}>By Service Type</div>
+          <div style={{ display: 'flex', gap: 20 }}>
+            {summary.by_service.map(svc => (
+              <div key={svc.service_type} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                  background: svc.service_type.toLowerCase().includes('express') ? '#f59e0b' : '#3b82f6',
+                }} />
+                <span style={{ fontSize: 13 }}>
+                  {svc.service_type}: <strong>{mn(svc.consignments)}</strong> shipments — {mc(_fmt(svc.total_cost))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Upload section */}
+      <div className="section-header">
+        <div>
+          <div className="section-title">Australia Post Freight Records</div>
+          <div className="text-muted" style={{ fontSize: 12, marginTop: 2 }}>{records.length} record{records.length !== 1 ? 's' : ''} in period</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {records.length > 0 && (
+            <button className="btn btn-ghost" onClick={handleClearAll} style={{ fontSize: 12 }}>Clear All</button>
+          )}
+          <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
+            {uploading ? 'Importing...' : '+ Upload CSV'}
+            <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} disabled={uploading} />
+          </label>
+        </div>
+      </div>
+
+      {uploadResult && (
+        <div className={`sync-banner ${uploadResult.type}`} style={{ borderRadius: 'var(--radius)', marginBottom: 16 }}>
+          <span>{uploadResult.text}</span>
+          <button className="banner-close" onClick={() => setUploadResult(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Records table */}
+      {records.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Consignment ID</th>
+                  <th>SCC Reference</th>
+                  <th>Service</th>
+                  <th>State</th>
+                  <th className="text-right">Base</th>
+                  <th className="text-right">FSC</th>
+                  <th className="text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map(r => (
+                  <tr key={r.id}>
+                    <td>{fmtDate(r.lodgement_date)}</td>
+                    <td><span className="mono" style={{ fontSize: 11 }}>{r.consignment_id}</span></td>
+                    <td>{r.shopify_ref || <span className="text-muted">—</span>}</td>
+                    <td style={{ fontSize: 12 }}>
+                      {r.service_type ? (
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 600,
+                          background: (r.service_type || '').toLowerCase().includes('express')
+                            ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.1)',
+                          color: (r.service_type || '').toLowerCase().includes('express')
+                            ? '#d97706' : '#2563eb',
+                        }}>
+                          {(r.service_type || '').includes('Express') ? 'Express' : 'Standard'}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td style={{ fontSize: 12 }}>{r.to_state || '—'}</td>
+                    <td className="text-right">{mc(_fmt(r.amount))}</td>
+                    <td className="text-right" style={{ color: 'var(--text-muted)' }}>{mc(_fmt(r.fsc))}</td>
+                    <td className="text-right" style={{ fontWeight: 600 }}>{mc(_fmt(r.total_cost))}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={5} style={{ fontWeight: 700, color: 'var(--text-muted)', fontSize: 12 }}>
+                    TOTAL ({mn(records.length)} consignments)
+                  </td>
+                  <td className="text-right" style={{ fontWeight: 700 }}>
+                    {mc(_fmt(records.reduce((s, r) => s + parseFloat(r.amount || 0), 0)))}
+                  </td>
+                  <td className="text-right" style={{ fontWeight: 700, color: 'var(--text-muted)' }}>
+                    {mc(_fmt(records.reduce((s, r) => s + parseFloat(r.fsc || 0), 0)))}
+                  </td>
+                  <td className="text-right" style={{ fontWeight: 700 }}>
+                    {mc(_fmt(records.reduce((s, r) => s + parseFloat(r.total_cost || 0), 0)))}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {records.length === 0 && !loading && (
+        <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+          <div style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 8 }}>No Australia Post freight data for this period.</div>
+          <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>Upload a CSV from Australia Post to see shipping costs here.</div>
+        </div>
+      )}
     </div>
   );
 }
