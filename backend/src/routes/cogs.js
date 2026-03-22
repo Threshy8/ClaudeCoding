@@ -55,20 +55,24 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   if (periodRefundsError) throw new Error(periodRefundsError.message);
 
+  // Helper: convert a dollar value to integer cents
+  const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
+
   // --- Build average cost map per SKU ---
-  const skuCostMap = {}; // { sku: { totalQty, totalCost, productName } }
+  // totalCostCents accumulates in integer cents to avoid float drift
+  const skuCostMap = {}; // { sku: { totalQty, totalCostCents, productName } }
   for (const p of allPurchases) {
     if (!skuCostMap[p.sku]) {
-      skuCostMap[p.sku] = { totalQty: 0, totalCost: 0, productName: p.product_name };
+      skuCostMap[p.sku] = { totalQty: 0, totalCostCents: 0, productName: p.product_name };
     }
     skuCostMap[p.sku].totalQty += p.quantity;
-    skuCostMap[p.sku].totalCost += Math.round(p.quantity * parseFloat(p.unit_cost) * 100) / 100;
+    skuCostMap[p.sku].totalCostCents += toCents(p.unit_cost) * p.quantity;
   }
 
-  const avgCostMap = {};       // { sku: avgCost }
+  const avgCostMap = {};       // { sku: avgCost in dollars }
   const totalPurchasedMap = {}; // { sku: totalQty }
   for (const [sku, d] of Object.entries(skuCostMap)) {
-    avgCostMap[sku] = d.totalQty > 0 ? d.totalCost / d.totalQty : 0;
+    avgCostMap[sku] = d.totalQty > 0 ? d.totalCostCents / d.totalQty / 100 : 0;
     totalPurchasedMap[sku] = d.totalQty;
   }
 
@@ -82,27 +86,28 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   }
 
   // --- Build period refund map (by refund_date) ---
-  // { sku: { qty, subtotal, product_name } }
+  // subtotalCents accumulates in integer cents
   const periodRefundMap = {};
   for (const r of periodRefunds) {
     if (!periodRefundMap[r.sku]) {
-      periodRefundMap[r.sku] = { product_name: r.product_name, qty: 0, subtotal: 0 };
+      periodRefundMap[r.sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0 };
     }
     periodRefundMap[r.sku].qty += r.quantity_refunded;
-    periodRefundMap[r.sku].subtotal += Math.round(parseFloat(r.refund_subtotal || 0) * 100) / 100;
+    periodRefundMap[r.sku].subtotalCents += toCents(r.refund_subtotal);
   }
 
   // --- Build period gross sales summary per SKU ---
-  const periodSkuMap = {}; // { sku: { product_name, gross_units, gross_revenue } }
+  // grossRevenueCents accumulates in integer cents
+  const periodSkuMap = {}; // { sku: { product_name, gross_units, grossRevenueCents } }
   for (const s of periodSales) {
     if (!periodSkuMap[s.sku]) {
-      periodSkuMap[s.sku] = { product_name: s.product_name, gross_units: 0, gross_revenue: 0 };
+      periodSkuMap[s.sku] = { product_name: s.product_name, gross_units: 0, grossRevenueCents: 0 };
     }
     periodSkuMap[s.sku].gross_units += s.quantity_sold;
-    const lineRev = s.line_revenue != null
-      ? parseFloat(s.line_revenue)
-      : s.quantity_sold * parseFloat(s.sale_price);
-    periodSkuMap[s.sku].gross_revenue += Math.round(lineRev * 100) / 100;
+    const lineRevCents = s.line_revenue != null
+      ? toCents(s.line_revenue)
+      : toCents(s.sale_price) * s.quantity_sold;
+    periodSkuMap[s.sku].grossRevenueCents += lineRevCents;
   }
 
   // Merge period refunds into periodSkuMap so cross-period returns create entries too
@@ -110,7 +115,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   for (const [sku, r] of Object.entries(periodRefundMap)) {
     if (['shipping', 'x-redo', 'tax'].includes(sku)) continue;
     if (!periodSkuMap[sku]) {
-      periodSkuMap[sku] = { product_name: r.product_name, gross_units: 0, gross_revenue: 0 };
+      periodSkuMap[sku] = { product_name: r.product_name, gross_units: 0, grossRevenueCents: 0 };
     }
   }
 
@@ -120,9 +125,10 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   const skuBreakdown = [];
 
   for (const [sku, d] of Object.entries(periodSkuMap)) {
-    const refund = periodRefundMap[sku] || { qty: 0, subtotal: 0 };
+    const refund = periodRefundMap[sku] || { qty: 0, subtotalCents: 0 };
     const units_sold = d.gross_units - refund.qty;
-    const revenue = d.gross_revenue - refund.subtotal;
+    const revenueCents = d.grossRevenueCents - refund.subtotalCents;
+    const revenue = revenueCents / 100;
 
     const avgCost = avgCostMap[sku] || 0;
     const cogs = units_sold * avgCost;
@@ -137,7 +143,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       product_name: d.product_name || skuCostMap[sku]?.productName || 'Unknown',
       units_sold,
       avg_unit_cost: Math.round(avgCost * 100) / 100,
-      revenue: Math.round(revenue * 100) / 100,
+      revenue,
       cogs: Math.round(cogs * 100) / 100,
       gross_margin_pct: Math.round(grossMargin * 100) / 100,
       units_on_hand: unitsOnHand,
@@ -175,59 +181,60 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .lt('order_date', periodEnd)
     .in('sku', ['x-redo', 'shipping', 'tax']);
 
-  function _sumVirtual(rows, sku) {
+  function _sumVirtualCents(rows, sku) {
     return (rows || []).filter(r => r.sku === sku)
-      .reduce((s, r) => s + Math.round((r.quantity_sold || 0) * parseFloat(r.sale_price || 0) * 100) / 100, 0);
+      .reduce((s, r) => s + toCents(r.sale_price) * (r.quantity_sold || 0), 0);
   }
-  const redoFees = _sumVirtual(virtualRows, 'x-redo');
+  const redoFeesCents = _sumVirtualCents(virtualRows, 'x-redo');
   const redoUnits = (virtualRows || []).filter(r => r.sku === 'x-redo')
     .reduce((s, r) => s + (r.quantity_sold || 0), 0);
-  const shippingTotal = _sumVirtual(virtualRows, 'shipping');
-  const taxTotal = _sumVirtual(virtualRows, 'tax');
+  const shippingTotalCents = _sumVirtualCents(virtualRows, 'shipping');
+  const taxTotalCents = _sumVirtualCents(virtualRows, 'tax');
 
-  // --- Sales breakdown ---
+  // --- Sales breakdown (all in integer cents) ---
   // NOTE: sale_price is already net of discounts (discount_allocations subtracted during
   // Shopify sync), so gross_sales = item revenue after discounts, before refunds.
   // Discount breakdown is not stored separately in shopify_sales.
-  const grossSales = Object.values(periodSkuMap).reduce((s, d) => s + d.gross_revenue, 0);
+  const grossSalesCents = Object.values(periodSkuMap).reduce((s, d) => s + d.grossRevenueCents, 0);
   const totalDiscounts = 0; // Already baked into sale_price during sync
 
   // Split refunds: product returns vs shipping/virtual SKU refunds
   const virtualRefundSkus = ['shipping', 'x-redo', 'tax'];
-  const totalReturns = Object.entries(periodRefundMap)
+  const totalReturnsCents = Object.entries(periodRefundMap)
     .filter(([sku]) => !virtualRefundSkus.includes(sku))
-    .reduce((s, [, d]) => s + d.subtotal, 0);
-  const shippingRefunds = (periodRefundMap['shipping'] || { subtotal: 0 }).subtotal;
+    .reduce((s, [, d]) => s + d.subtotalCents, 0);
+  const shippingRefundsCents = (periodRefundMap['shipping'] || { subtotalCents: 0 }).subtotalCents;
 
-  const netSales = grossSales - totalReturns;
-  const shippingRevenue = shippingTotal - shippingRefunds;
-  const totalCollected = netSales + shippingRevenue + redoFees;
+  const netSalesCents = grossSalesCents - totalReturnsCents;
+  const shippingRevenueCents = shippingTotalCents - shippingRefundsCents;
+  const totalCollectedCents = netSalesCents + shippingRevenueCents + redoFeesCents;
 
-  // --- Totals ---
-  const totalRevenue = skuBreakdown.reduce((s, r) => s + r.revenue, 0);
+  // --- Totals (cents-based for revenue, float for cost fields) ---
+  const totalRevenueCents = skuBreakdown.reduce((s, r) => s + Math.round(r.revenue * 100), 0);
   const totalCogs = skuBreakdown.reduce((s, r) => s + r.cogs, 0);
   const totalInventoryValue = skuBreakdown.reduce((s, r) => s + r.inventory_value, 0);
+  const totalRevenue = totalRevenueCents / 100;
   const overallMargin = totalRevenue > 0 ? ((totalRevenue - totalCogs) / totalRevenue) * 100 : 0;
 
   return {
     period: periodLabel,
     period_start: periodStart,
     period_end: periodEnd,
-    total_revenue: Math.round((totalRevenue + redoFees + shippingTotal) * 100) / 100,
+    total_revenue: (totalRevenueCents + redoFeesCents + shippingTotalCents) / 100,
     total_cogs: Math.round(totalCogs * 100) / 100,
     total_inventory_value: Math.round(totalInventoryValue * 100) / 100,
     gross_margin_pct: Math.round(overallMargin * 100) / 100,
-    redo_fees: Math.round(redoFees * 100) / 100,
+    redo_fees: redoFeesCents / 100,
     redo_units: redoUnits,
-    shipping_total: Math.round(shippingTotal * 100) / 100,
-    tax_total: Math.round(taxTotal * 100) / 100,
+    shipping_total: shippingTotalCents / 100,
+    tax_total: taxTotalCents / 100,
     // Sales breakdown (mirrors Shopify's Total Sales view)
-    gross_sales: Math.round(grossSales * 100) / 100,
+    gross_sales: grossSalesCents / 100,
     total_discounts: totalDiscounts,
-    total_returns: Math.round(totalReturns * 100) / 100,
-    net_sales: Math.round(netSales * 100) / 100,
-    shipping_revenue: Math.round(shippingRevenue * 100) / 100,
-    total_collected: Math.round(totalCollected * 100) / 100,
+    total_returns: totalReturnsCents / 100,
+    net_sales: netSalesCents / 100,
+    shipping_revenue: shippingRevenueCents / 100,
+    total_collected: totalCollectedCents / 100,
     sku_breakdown: skuBreakdown,
   };
 }
