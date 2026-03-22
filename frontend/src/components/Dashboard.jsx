@@ -28,11 +28,47 @@ function fmtRangeLabel(dateRange) {
 // Map cryptic NO-SKU identifiers to friendly display names
 function friendlyProductName(sku, productName) {
   if (/^NO-SKU-/i.test(sku || '')) {
-    // Use product_name if it's meaningful, otherwise map common patterns
     if (productName && !/^NO-SKU/i.test(productName)) return productName;
     return 'Item Personalisation';
   }
   return productName || sku;
+}
+
+// Group SKU rows by product_name into product families
+function groupByProduct(rows) {
+  const groups = {};
+  for (const row of rows) {
+    const name = friendlyProductName(row.sku, row.product_name);
+    if (!groups[name]) {
+      groups[name] = { name, variants: [] };
+    }
+    groups[name].variants.push(row);
+  }
+
+  return Object.values(groups).map(g => {
+    const units = g.variants.reduce((s, r) => s + (r.units_sold || 0), 0);
+    const revenue = g.variants.reduce((s, r) => s + (r.revenue || 0), 0);
+    const cogs = g.variants.reduce((s, r) => s + (r.cogs || 0), 0);
+    const onHand = g.variants.reduce((s, r) => s + (r.units_on_hand || 0), 0);
+    const invValue = g.variants.reduce((s, r) => s + (r.inventory_value || 0), 0);
+    const hasCost = g.variants.some(r => (r.cogs || 0) > 0 || (r.avg_unit_cost || 0) > 0);
+    const avgCost = units > 0 && hasCost ? cogs / units : 0;
+    const profit = revenue - cogs;
+    const margin = revenue > 0 && hasCost ? Math.round(profit / revenue * 100) : null;
+
+    return {
+      name: g.name,
+      units,
+      avgCost,
+      revenue,
+      cogs,
+      onHand,
+      invValue,
+      hasCost,
+      margin,
+      variants: g.variants.sort((a, b) => (b.revenue || 0) - (a.revenue || 0)),
+    };
+  }).sort((a, b) => b.revenue - a.revenue);
 }
 
 export default function Dashboard({ dateRange }) {
@@ -41,7 +77,12 @@ export default function Dashboard({ dateRange }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isFifo, setIsFifo] = useState(false);
+  const [expanded, setExpanded] = useState({});
   const { mc, mn, mp } = useDemoMask();
+
+  const toggleExpand = (name) => {
+    setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
+  };
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -60,11 +101,9 @@ export default function Dashboard({ dateRange }) {
           setIsFifo(true);
           return data;
         }
-        // FIFO has no entries or all COGS are zero — try WAC
         return apiFetch(`/api/cogs/summary?${params}`).then(wac => {
           const wacHasCost = (wac?.sku_breakdown || []).some(r => (r.cogs || 0) > 0);
           if (!wacHasCost && breakdown.length > 0) {
-            // WAC also has no cost data — use FIFO anyway (it has revenue)
             setIsFifo(true);
             return data;
           }
@@ -93,6 +132,8 @@ export default function Dashboard({ dateRange }) {
     .filter(r => !VIRTUAL_SKUS.includes((r.sku || '').toLowerCase()))
     .sort((a, b) => (b.revenue || 0) - (a.revenue || 0));
 
+  const productGroups = groupByProduct(rows);
+
   // Single source of truth from the backend for the revenue/breakdown figures
   const grossSales = skuData.gross_sales || 0;
   const totalReturns = skuData.total_returns || 0;
@@ -109,8 +150,13 @@ export default function Dashboard({ dateRange }) {
 
   const rangeLabel = fmtRangeLabel(dateRange);
 
-  // Check if we have any cost data at all
   const hasCostData = rows.some(r => (r.cogs || 0) > 0 || (r.avg_unit_cost || 0) > 0);
+
+  const marginBadge = (m) => {
+    if (m == null) return <span className="text-muted">—</span>;
+    const cls = m >= 50 ? 'badge-green' : m >= 20 ? 'badge-yellow' : 'badge-red';
+    return <span className={`badge ${cls}`}>{mp(m)}</span>;
+  };
 
   return (
     <div>
@@ -172,7 +218,7 @@ export default function Dashboard({ dateRange }) {
 
       <div className="card">
         <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          SKU Breakdown — {rangeLabel}
+          Product Breakdown — {rangeLabel}
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 5,
             padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700,
@@ -188,14 +234,13 @@ export default function Dashboard({ dateRange }) {
             {isFifo ? 'FIFO' : 'WAC estimate'}
           </span>
         </div>
-        {rows.length === 0 ? (
+        {productGroups.length === 0 ? (
           <div className="empty">No sales data for this period. Sync Shopify or log purchases first.</div>
         ) : (
           <div className="table-wrap">
             <table className="sku-table">
               <thead>
                 <tr>
-                  <th>SKU</th>
                   <th>Product</th>
                   <th className="text-right">Units</th>
                   <th className="text-right">Avg Cost</th>
@@ -207,33 +252,62 @@ export default function Dashboard({ dateRange }) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
-                  const avgCost = row.units_sold > 0 ? row.cogs / row.units_sold : row.avg_unit_cost || 0;
-                  const rowHasCost = (row.cogs || 0) > 0 || (avgCost || 0) > 0;
-                  const profit = (row.revenue || 0) - (row.cogs || 0);
-                  const m = row.revenue > 0 && rowHasCost ? Math.round(profit / row.revenue * 100) : null;
-                  const mClass = m == null ? '' : m >= 50 ? 'badge-green' : m >= 20 ? 'badge-yellow' : 'badge-red';
-                  const isNoSku = /^NO-SKU-/i.test(row.sku || '');
+                {productGroups.map((group) => {
+                  const isExpanded = expanded[group.name] || false;
+                  const hasVariants = group.variants.length > 1;
                   return (
-                    <tr key={row.sku}>
-                      <td><span className={isNoSku ? 'sku-nosku' : 'mono'}>{isNoSku ? 'CUSTOM' : row.sku}</span></td>
-                      <td>{friendlyProductName(row.sku, row.product_name)}</td>
-                      <td className="text-right">{mn(row.units_sold)}</td>
-                      <td className="text-right">{rowHasCost ? mc(_fmt(avgCost)) : <span className="text-muted">—</span>}</td>
-                      <td className="text-right">{mc(_fmt(row.revenue))}</td>
-                      <td className="text-right">{rowHasCost ? mc(_fmt(row.cogs)) : <span className="text-muted">—</span>}</td>
-                      <td className="text-right">
-                        {m != null ? <span className={`badge ${mClass}`}>{mp(m)}</span> : <span className="text-muted">—</span>}
-                      </td>
-                      <td className="text-right">{mn(row.units_on_hand)}</td>
-                      <td className="text-right">{row.inventory_value > 0 ? mc(_fmt(row.inventory_value)) : <span className="text-muted">—</span>}</td>
-                    </tr>
+                    <React.Fragment key={group.name}>
+                      <tr
+                        className={`product-row ${hasVariants ? 'expandable' : ''} ${isExpanded ? 'expanded' : ''}`}
+                        onClick={hasVariants ? () => toggleExpand(group.name) : undefined}
+                      >
+                        <td>
+                          <span className="product-name-cell">
+                            {hasVariants && (
+                              <span className={`expand-chevron ${isExpanded ? 'open' : ''}`}>›</span>
+                            )}
+                            <span>{group.name}</span>
+                            {hasVariants && (
+                              <span className="variant-count">{group.variants.length} variants</span>
+                            )}
+                          </span>
+                        </td>
+                        <td className="text-right">{mn(group.units)}</td>
+                        <td className="text-right">{group.hasCost ? mc(_fmt(group.avgCost)) : <span className="text-muted">—</span>}</td>
+                        <td className="text-right">{mc(_fmt(group.revenue))}</td>
+                        <td className="text-right">{group.hasCost ? mc(_fmt(group.cogs)) : <span className="text-muted">—</span>}</td>
+                        <td className="text-right">{marginBadge(group.margin)}</td>
+                        <td className="text-right">{mn(group.onHand)}</td>
+                        <td className="text-right">{group.invValue > 0 ? mc(_fmt(group.invValue)) : <span className="text-muted">—</span>}</td>
+                      </tr>
+                      {isExpanded && group.variants.map((row) => {
+                        const avgCost = row.units_sold > 0 ? row.cogs / row.units_sold : row.avg_unit_cost || 0;
+                        const rowHasCost = (row.cogs || 0) > 0 || (avgCost || 0) > 0;
+                        const profit = (row.revenue || 0) - (row.cogs || 0);
+                        const m = row.revenue > 0 && rowHasCost ? Math.round(profit / row.revenue * 100) : null;
+                        return (
+                          <tr key={row.sku} className="variant-row">
+                            <td>
+                              <span className="variant-sku-cell">
+                                <span className="mono">{row.sku}</span>
+                              </span>
+                            </td>
+                            <td className="text-right">{mn(row.units_sold)}</td>
+                            <td className="text-right">{rowHasCost ? mc(_fmt(avgCost)) : <span className="text-muted">—</span>}</td>
+                            <td className="text-right">{mc(_fmt(row.revenue))}</td>
+                            <td className="text-right">{rowHasCost ? mc(_fmt(row.cogs)) : <span className="text-muted">—</span>}</td>
+                            <td className="text-right">{marginBadge(m)}</td>
+                            <td className="text-right">{mn(row.units_on_hand)}</td>
+                            <td className="text-right">{row.inventory_value > 0 ? mc(_fmt(row.inventory_value)) : <span className="text-muted">—</span>}</td>
+                          </tr>
+                        );
+                      })}
+                    </React.Fragment>
                   );
                 })}
                 {redoFees > 0 && (
                   <tr key="x-redo">
-                    <td><span className="sku-virtual">REDO</span></td>
-                    <td>Redo Returns Fee</td>
+                    <td><span className="sku-virtual">REDO</span> Redo Returns Fee</td>
                     <td className="text-right">{mn(skuData.redo_units || 0)}</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right">{mc(_fmt(redoFees))}</td>
@@ -245,8 +319,7 @@ export default function Dashboard({ dateRange }) {
                 )}
                 {shippingRevenue > 0 && (
                   <tr key="shipping">
-                    <td><span className="sku-virtual">SHIP</span></td>
-                    <td>Shipping Charges</td>
+                    <td><span className="sku-virtual">SHIP</span> Shipping Charges</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right">{mc(_fmt(shippingRevenue))}</td>
@@ -259,7 +332,7 @@ export default function Dashboard({ dateRange }) {
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={2}>TOTAL</td>
+                  <td>TOTAL</td>
                   <td className="text-right">{mn(rows.reduce((s, r) => s + r.units_sold, 0))}</td>
                   <td></td>
                   <td className="text-right">{mc(_fmt(totalCollected))}</td>

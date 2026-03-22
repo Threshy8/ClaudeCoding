@@ -436,6 +436,65 @@ tfoot td {
 .text-muted { color: var(--text-muted); }
 .mono       { font-family: 'SF Mono', 'Fira Mono', 'Menlo', monospace; font-size: 12px; }
 
+/* ===== Product Grouping / Expandable Rows ===== */
+.product-row.expandable {
+  cursor: pointer;
+}
+.product-row.expandable:hover td {
+  background: var(--accent-dim2) !important;
+}
+.product-row td:first-child {
+  font-weight: 600;
+}
+.product-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.expand-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.expand-chevron.open {
+  transform: rotate(90deg);
+}
+.variant-count {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-alt);
+  padding: 1px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+.variant-row td {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  font-size: 12px;
+  background: var(--bg-alt) !important;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-muted);
+}
+.variant-row:hover td {
+  background: var(--accent-dim2) !important;
+}
+.variant-row td:first-child {
+  font-weight: 400;
+}
+.variant-sku-cell {
+  display: inline-flex;
+  align-items: center;
+  padding-left: 26px;
+}
+
 /* ===== SKU Labels ===== */
 .sku-nosku {
   display: inline-block;
