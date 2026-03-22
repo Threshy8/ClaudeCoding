@@ -47,6 +47,8 @@ function groupByProduct(rows) {
 
   return Object.values(groups).map(g => {
     const units = g.variants.reduce((s, r) => s + (r.units_sold || 0), 0);
+    const unitsGross = g.variants.reduce((s, r) => s + (r.units_gross || r.units_sold || 0), 0);
+    const unitsReturned = g.variants.reduce((s, r) => s + (r.units_returned || 0), 0);
     const revenue = g.variants.reduce((s, r) => s + (r.revenue || 0), 0);
     const cogs = g.variants.reduce((s, r) => s + (r.cogs || 0), 0);
     const onHand = g.variants.reduce((s, r) => s + (r.units_on_hand || 0), 0);
@@ -59,6 +61,8 @@ function groupByProduct(rows) {
     return {
       name: g.name,
       units,
+      unitsGross,
+      unitsReturned,
       avgCost,
       revenue,
       cogs,
@@ -156,6 +160,16 @@ export default function Dashboard({ dateRange }) {
     if (m == null) return <span className="text-muted">—</span>;
     const cls = m >= 50 ? 'badge-green' : m >= 20 ? 'badge-yellow' : 'badge-red';
     return <span className={`badge ${cls}`}>{mp(m)}</span>;
+  };
+
+  const unitsCell = (net, gross, returned) => {
+    if (!returned || returned <= 0) return mn(net);
+    return (
+      <span className="units-with-returns">
+        <span>{mn(net)}</span>
+        <span className="units-return-detail">{mn(gross)} sold, −{mn(returned)} returned</span>
+      </span>
+    );
   };
 
   return (
@@ -272,7 +286,7 @@ export default function Dashboard({ dateRange }) {
                             )}
                           </span>
                         </td>
-                        <td className="text-right">{mn(group.units)}</td>
+                        <td className="text-right">{unitsCell(group.units, group.unitsGross, group.unitsReturned)}</td>
                         <td className="text-right">{group.hasCost ? mc(_fmt(group.avgCost)) : <span className="text-muted">—</span>}</td>
                         <td className="text-right">{mc(_fmt(group.revenue))}</td>
                         <td className="text-right">{group.hasCost ? mc(_fmt(group.cogs)) : <span className="text-muted">—</span>}</td>
@@ -292,7 +306,7 @@ export default function Dashboard({ dateRange }) {
                                 <span className="mono">{row.sku}</span>
                               </span>
                             </td>
-                            <td className="text-right">{mn(row.units_sold)}</td>
+                            <td className="text-right">{unitsCell(row.units_sold, row.units_gross, row.units_returned)}</td>
                             <td className="text-right">{rowHasCost ? mc(_fmt(avgCost)) : <span className="text-muted">—</span>}</td>
                             <td className="text-right">{mc(_fmt(row.revenue))}</td>
                             <td className="text-right">{rowHasCost ? mc(_fmt(row.cogs)) : <span className="text-muted">—</span>}</td>
@@ -333,7 +347,11 @@ export default function Dashboard({ dateRange }) {
               <tfoot>
                 <tr>
                   <td>TOTAL</td>
-                  <td className="text-right">{mn(rows.reduce((s, r) => s + r.units_sold, 0))}</td>
+                  <td className="text-right">{unitsCell(
+                    rows.reduce((s, r) => s + (r.units_sold || 0), 0),
+                    rows.reduce((s, r) => s + (r.units_gross || r.units_sold || 0), 0),
+                    rows.reduce((s, r) => s + (r.units_returned || 0), 0),
+                  )}</td>
                   <td></td>
                   <td className="text-right">{mc(_fmt(totalCollected))}</td>
                   <td className="text-right">{hasCostData ? mc(_fmt(totalCogs)) : <span className="text-muted">—</span>}</td>
