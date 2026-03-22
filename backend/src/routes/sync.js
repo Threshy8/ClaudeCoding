@@ -370,7 +370,19 @@ router.post('/shopify', async (req, res) => {
       const closedDate = toStoreDate(order.closed_at);
       const orderDate = toStoreDate(order.created_at);
 
-      // Parse original order name from note (e.g. "for order #6084")
+      // Extract original order number from Redo metadata
+      // 1. Try note_attributes (_redo_original_order)
+      // 2. Fall back to parsing the note text
+      let origOrderNumber = null;
+      const redoAttr = (order.note_attributes || []).find(a => a.name === '_redo_original_order');
+      if (redoAttr && redoAttr.value) {
+        origOrderNumber = String(redoAttr.value).replace(/^#/, '');
+      }
+      if (!origOrderNumber) {
+        const noteMatch = note.match(/for order #(\d+)/);
+        if (noteMatch) origOrderNumber = noteMatch[1];
+      }
+
       const origMatch = note.match(/for order (#\d+)/);
       let originalOrder = null;
       if (origMatch) {
@@ -424,7 +436,7 @@ router.post('/shopify', async (req, res) => {
         const subtotal = Math.round(unitPrice * qty * 100) / 100;
         refundRecords.push({
           shopify_order_id:  String(order.id),
-          order_number:      order.order_number ? String(order.order_number) : null,
+          order_number:      origOrderNumber || (order.order_number ? String(order.order_number) : null),
           shopify_refund_id: `redo-return-${order.id}`,
           sku,
           product_name:      li.title || li.name || 'Unknown',
