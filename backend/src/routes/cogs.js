@@ -345,16 +345,18 @@ router.get('/orders', async (req, res) => {
     .select('sku, quantity, unit_cost');
   if (pErr) return res.status(500).json({ error: pErr.message });
 
-  // Build avg cost map
+  const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
+
+  // Build avg cost map (cents)
   const costMap = {};
   for (const p of (purchases || [])) {
-    if (!costMap[p.sku]) costMap[p.sku] = { totalCost: 0, totalQty: 0 };
-    costMap[p.sku].totalCost += p.unit_cost * p.quantity;
+    if (!costMap[p.sku]) costMap[p.sku] = { totalCostCents: 0, totalQty: 0 };
+    costMap[p.sku].totalCostCents += toCents(p.unit_cost) * p.quantity;
     costMap[p.sku].totalQty  += p.quantity;
   }
-  const avgCost = (sku) => {
+  const avgCostCents = (sku) => {
     const c = costMap[sku];
-    return c && c.totalQty > 0 ? c.totalCost / c.totalQty : 0;
+    return c && c.totalQty > 0 ? c.totalCostCents / c.totalQty : 0;
   };
 
   // Get all sales in period grouped by order
@@ -368,7 +370,7 @@ router.get('/orders', async (req, res) => {
     .order('order_date', { ascending: false });
   if (sErr) return res.status(500).json({ error: sErr.message });
 
-  // Group by order
+  // Group by order (accumulate in cents)
   const orderMap = {};
   for (const s of (sales || [])) {
     if (!orderMap[s.shopify_order_id]) {
@@ -379,28 +381,32 @@ router.get('/orders', async (req, res) => {
         order_date:           s.order_date,
         fulfillment_location: s.fulfillment_location || 'Unknown',
         line_items: [],
-        total_units:   0,
-        total_revenue: 0,
-        total_cogs:    0,
+        total_units:       0,
+        total_revenue_cents: 0,
+        total_cogs_cents:    0,
       };
     }
     const o = orderMap[s.shopify_order_id];
-    const qty     = s.quantity_sold || 0;
-    const revenue = qty * parseFloat(s.sale_price || 0);
-    const cogs    = qty * avgCost(s.sku);
-    o.line_items.push({ sku: s.sku, product_name: s.product_name, qty, revenue, cogs });
-    o.total_units   += qty;
-    o.total_revenue += revenue;
-    o.total_cogs    += cogs;
+    const qty        = s.quantity_sold || 0;
+    const revCents   = toCents(s.sale_price) * qty;
+    const cogsCents  = Math.round(avgCostCents(s.sku) * qty);
+    o.line_items.push({ sku: s.sku, product_name: s.product_name, qty, revenue: revCents / 100, cogs: cogsCents / 100 });
+    o.total_units        += qty;
+    o.total_revenue_cents += revCents;
+    o.total_cogs_cents    += cogsCents;
   }
 
-  const orders = Object.values(orderMap).map(o => ({
-    ...o,
-    total_revenue:    Math.round(o.total_revenue * 100) / 100,
-    total_cogs:       Math.round(o.total_cogs    * 100) / 100,
-    gross_profit:     Math.round((o.total_revenue - o.total_cogs) * 100) / 100,
-    gross_margin_pct: o.total_revenue > 0 ? Math.round((o.total_revenue - o.total_cogs) / o.total_revenue * 100) : null,
-  }));
+  const orders = Object.values(orderMap).map(o => {
+    const rev = o.total_revenue_cents / 100;
+    const cogs = o.total_cogs_cents / 100;
+    return {
+      ...o,
+      total_revenue:    rev,
+      total_cogs:       cogs,
+      gross_profit:     Math.round((o.total_revenue_cents - o.total_cogs_cents)) / 100,
+      gross_margin_pct: o.total_revenue_cents > 0 ? Math.round((rev - cogs) / rev * 100) : null,
+    };
+  });
 
   orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
   res.json(orders);
@@ -436,15 +442,17 @@ router.get('/resends', async (req, res) => {
     .select('sku, quantity, unit_cost');
   if (pErr) return res.status(500).json({ error: pErr.message });
 
+  const toCentsRs = (v) => Math.round(parseFloat(v || 0) * 100);
+
   const costMap = {};
   for (const p of (purchases || [])) {
-    if (!costMap[p.sku]) costMap[p.sku] = { totalCost: 0, totalQty: 0 };
-    costMap[p.sku].totalCost += p.unit_cost * p.quantity;
+    if (!costMap[p.sku]) costMap[p.sku] = { totalCostCents: 0, totalQty: 0 };
+    costMap[p.sku].totalCostCents += toCentsRs(p.unit_cost) * p.quantity;
     costMap[p.sku].totalQty  += p.quantity;
   }
-  const avgCost = (sku) => {
+  const avgCostCents = (sku) => {
     const c = costMap[sku];
-    return c && c.totalQty > 0 ? c.totalCost / c.totalQty : 0;
+    return c && c.totalQty > 0 ? c.totalCostCents / c.totalQty : 0;
   };
 
   // Query resend orders (order_name is Shopify's order.name e.g. "#6310-RESEND")
@@ -461,7 +469,7 @@ router.get('/resends', async (req, res) => {
   const { data: sales, error: sErr } = await query;
   if (sErr) return res.status(500).json({ error: sErr.message });
 
-  // Group by order
+  // Group by order (accumulate in cents)
   const orderMap = {};
   for (const s of (sales || [])) {
     if (!orderMap[s.shopify_order_id]) {
@@ -476,21 +484,21 @@ router.get('/resends', async (req, res) => {
         fulfillment_location:  s.fulfillment_location || 'Unknown',
         line_items:            [],
         total_units:           0,
-        estimated_cogs:        0,
+        estimated_cogs_cents:  0,
         notes:                 null,
       };
     }
     const o = orderMap[s.shopify_order_id];
     const qty = s.quantity_sold || 0;
-    const cogs = qty * avgCost(s.sku);
+    const cogsCents = Math.round(avgCostCents(s.sku) * qty);
     o.line_items.push({ sku: s.sku, product_name: s.product_name, qty });
-    o.total_units    += qty;
-    o.estimated_cogs += cogs;
+    o.total_units          += qty;
+    o.estimated_cogs_cents += cogsCents;
   }
 
   const orders = Object.values(orderMap).map(o => ({
     ...o,
-    estimated_cogs: Math.round(o.estimated_cogs * 100) / 100,
+    estimated_cogs: o.estimated_cogs_cents / 100,
   }));
 
   orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
@@ -498,7 +506,7 @@ router.get('/resends', async (req, res) => {
   const summary = {
     total_resends:       orders.length,
     total_units_resent:  orders.reduce((s, o) => s + o.total_units, 0),
-    total_estimated_cogs: Math.round(orders.reduce((s, o) => s + o.estimated_cogs, 0) * 100) / 100,
+    total_estimated_cogs: orders.reduce((s, o) => s + Math.round(o.estimated_cogs * 100), 0) / 100,
   };
 
   res.json({ summary, orders });
@@ -705,7 +713,9 @@ router.get('/entries/by-order', async (req, res) => {
       if (s.customer_name) customerMap[s.shopify_order_id] = s.customer_name;
     }
 
-    // Group by order
+    const toCentsLocal = (v) => Math.round(parseFloat(v || 0) * 100);
+
+    // Group by order (accumulate in cents)
     const orderMap = {};
     for (const e of entries) {
       const skuLower = (e.sku || '').toLowerCase();
@@ -719,36 +729,40 @@ router.get('/entries/by-order', async (req, res) => {
           fulfillment_location: e.fulfillment_location || 'Unknown',
           line_items: [],
           total_units: 0,
-          total_revenue: 0,
-          total_cogs: 0,
+          total_revenue_cents: 0,
+          total_cogs_cents: 0,
         };
       }
       const o = orderMap[e.shopify_order_id];
       const qty = e.quantity_sold || 0;
-      const revenue = qty * parseFloat(e.sale_price || 0);
-      const cogs = qty * parseFloat(e.total_unit_cogs || 0);
+      const revCents = toCentsLocal(e.sale_price) * qty;
+      const cogsCents = toCentsLocal(e.total_unit_cogs) * qty;
       o.line_items.push({
         sku: e.sku,
         product_name: e.product_name,
         qty,
-        revenue: Math.round(revenue * 100) / 100,
-        cogs: Math.round(cogs * 100) / 100,
+        revenue: revCents / 100,
+        cogs: cogsCents / 100,
         unit_purchase_cost: parseFloat(e.unit_purchase_cost || 0),
         unit_gd_shipping: parseFloat(e.unit_gd_shipping || 0),
         unit_scc_handling: parseFloat(e.unit_scc_handling || 0),
       });
       o.total_units += qty;
-      o.total_revenue += revenue;
-      o.total_cogs += cogs;
+      o.total_revenue_cents += revCents;
+      o.total_cogs_cents += cogsCents;
     }
 
-    const orders = Object.values(orderMap).map(o => ({
-      ...o,
-      total_revenue: Math.round(o.total_revenue * 100) / 100,
-      total_cogs: Math.round(o.total_cogs * 100) / 100,
-      gross_profit: Math.round((o.total_revenue - o.total_cogs) * 100) / 100,
-      gross_margin_pct: o.total_revenue > 0 ? Math.round((o.total_revenue - o.total_cogs) / o.total_revenue * 100) : null,
-    }));
+    const orders = Object.values(orderMap).map(o => {
+      const rev = o.total_revenue_cents / 100;
+      const cogs = o.total_cogs_cents / 100;
+      return {
+        ...o,
+        total_revenue: rev,
+        total_cogs: cogs,
+        gross_profit: (o.total_revenue_cents - o.total_cogs_cents) / 100,
+        gross_margin_pct: o.total_revenue_cents > 0 ? Math.round((rev - cogs) / rev * 100) : null,
+      };
+    });
 
     orders.sort((a, b) => b.order_date.localeCompare(a.order_date));
     res.json(orders);
@@ -772,14 +786,16 @@ router.get('/inventory/summary', async (req, res) => {
     if (lotsErr) return res.status(500).json({ error: lotsErr.message });
     if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
 
-    // Group by SKU
+    const toCentsInv = (v) => Math.round(parseFloat(v || 0) * 100);
+
+    // Group by SKU (accumulate cost in cents)
     const skuMap = {};
     for (const lot of lots) {
       if (!skuMap[lot.sku]) {
-        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, total_cost: 0, po_numbers: new Set() };
+        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set() };
       }
       skuMap[lot.sku].quantity_remaining += lot.quantity_remaining;
-      skuMap[lot.sku].total_cost += lot.quantity_remaining * parseFloat(lot.unit_cost);
+      skuMap[lot.sku].totalCostCents += toCentsInv(lot.unit_cost) * lot.quantity_remaining;
       if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
     }
 
@@ -798,7 +814,7 @@ router.get('/inventory/summary', async (req, res) => {
       monthSoldMap[s.sku] = (monthSoldMap[s.sku] || 0) + s.quantity_sold;
     }
 
-    // 3. Get avg sale price per SKU (last 30 days)
+    // 3. Get avg sale price per SKU (last 30 days, in cents)
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const { data: recentSales } = await supabase
       .from('shopify_sales')
@@ -807,27 +823,27 @@ router.get('/inventory/summary', async (req, res) => {
       .eq('store', store)
       .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
-    const salePriceMap = {}; // { sku: { totalRev, totalQty } }
+    const salePriceMap = {}; // { sku: { totalRevCents, totalQty } }
     for (const s of (recentSales || [])) {
-      if (!salePriceMap[s.sku]) salePriceMap[s.sku] = { totalRev: 0, totalQty: 0 };
+      if (!salePriceMap[s.sku]) salePriceMap[s.sku] = { totalRevCents: 0, totalQty: 0 };
       const qty = s.quantity_sold || 0;
-      salePriceMap[s.sku].totalRev += qty * parseFloat(s.sale_price || 0);
+      salePriceMap[s.sku].totalRevCents += toCentsInv(s.sale_price) * qty;
       salePriceMap[s.sku].totalQty += qty;
     }
 
     // 4. Build response
     const skus = Object.values(skuMap).map(s => {
-      const avgUnitCost = s.quantity_remaining > 0 ? s.total_cost / s.quantity_remaining : 0;
+      const avgUnitCostCents = s.quantity_remaining > 0 ? s.totalCostCents / s.quantity_remaining : 0;
       const sp = salePriceMap[s.sku];
-      const avgSalePrice = sp && sp.totalQty > 0 ? sp.totalRev / sp.totalQty : 0;
+      const avgSalePriceCents = sp && sp.totalQty > 0 ? sp.totalRevCents / sp.totalQty : 0;
       return {
         sku: s.sku,
         product_name: s.product_name,
         quantity_remaining: s.quantity_remaining,
-        unit_cost: Math.round(avgUnitCost * 100) / 100,
-        inventory_value: Math.round(s.total_cost * 100) / 100,
-        avg_sale_price: Math.round(avgSalePrice * 100) / 100,
-        retail_value: Math.round(s.quantity_remaining * avgSalePrice * 100) / 100,
+        unit_cost: Math.round(avgUnitCostCents) / 100,
+        inventory_value: s.totalCostCents / 100,
+        avg_sale_price: Math.round(avgSalePriceCents) / 100,
+        retail_value: Math.round(s.quantity_remaining * avgSalePriceCents) / 100,
         units_sold_this_month: monthSoldMap[s.sku] || 0,
         po_numbers: [...s.po_numbers],
         low_stock: s.quantity_remaining < 10,
@@ -838,8 +854,8 @@ router.get('/inventory/summary', async (req, res) => {
 
     res.json({
       skus,
-      total_inventory_value: Math.round(skus.reduce((s, r) => s + r.inventory_value, 0) * 100) / 100,
-      total_retail_value: Math.round(skus.reduce((s, r) => s + r.retail_value, 0) * 100) / 100,
+      total_inventory_value: skus.reduce((s, r) => s + Math.round(r.inventory_value * 100), 0) / 100,
+      total_retail_value: skus.reduce((s, r) => s + Math.round(r.retail_value * 100), 0) / 100,
       total_skus: skus.length,
       total_units: skus.reduce((s, r) => s + r.quantity_remaining, 0),
     });
@@ -868,19 +884,20 @@ router.get('/forecast/revenue', async (req, res) => {
       .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     if (sErr) return res.status(500).json({ error: sErr.message });
 
-    // Build daily revenue map
-    const dailyMap = {};
+    // Build daily revenue map (in cents)
+    const toCentsFc = (v) => Math.round(parseFloat(v || 0) * 100);
+    const dailyMapCents = {};
     for (const s of (sales || [])) {
       const d = s.order_date;
-      const rev = s.line_revenue != null ? parseFloat(s.line_revenue) : (s.quantity_sold || 0) * parseFloat(s.sale_price || 0);
-      dailyMap[d] = (dailyMap[d] || 0) + rev;
+      const revCents = s.line_revenue != null ? toCentsFc(s.line_revenue) : toCentsFc(s.sale_price) * (s.quantity_sold || 0);
+      dailyMapCents[d] = (dailyMapCents[d] || 0) + revCents;
     }
 
     // Fill all 90 days (including zero-revenue days)
     const historical = [];
     for (let i = 89; i >= 0; i--) {
       const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      historical.push({ date: d, revenue: Math.round((dailyMap[d] || 0) * 100) / 100 });
+      historical.push({ date: d, revenue: (dailyMapCents[d] || 0) / 100 });
     }
 
     // 7-day rolling average
@@ -1041,25 +1058,26 @@ router.get('/forecast/peak-period', async (req, res) => {
       .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     if (sErr) return res.status(500).json({ error: sErr.message });
 
-    // Daily breakdown
-    const dailyMap = {};
+    // Daily breakdown (accumulate in cents)
+    const toCentsPk = (v) => Math.round(parseFloat(v || 0) * 100);
+    const dailyMapCents = {};
     const skuMap = {};
-    let totalRevenue = 0;
+    let totalRevenueCents = 0;
     let totalUnits = 0;
 
     for (const s of (sales || [])) {
       const qty = s.quantity_sold || 0;
-      const rev = s.line_revenue != null ? parseFloat(s.line_revenue) : qty * parseFloat(s.sale_price || 0);
-      totalRevenue += rev;
+      const revCents = s.line_revenue != null ? toCentsPk(s.line_revenue) : toCentsPk(s.sale_price) * qty;
+      totalRevenueCents += revCents;
       totalUnits += qty;
 
-      dailyMap[s.order_date] = (dailyMap[s.order_date] || 0) + rev;
+      dailyMapCents[s.order_date] = (dailyMapCents[s.order_date] || 0) + revCents;
 
       if (!skuMap[s.sku]) {
-        skuMap[s.sku] = { sku: s.sku, product_name: s.product_name, units_sold: 0, revenue: 0 };
+        skuMap[s.sku] = { sku: s.sku, product_name: s.product_name, units_sold: 0, revenueCents: 0 };
       }
       skuMap[s.sku].units_sold += qty;
-      skuMap[s.sku].revenue += rev;
+      skuMap[s.sku].revenueCents += revCents;
     }
 
     // Get current stock
@@ -1074,8 +1092,8 @@ router.get('/forecast/peak-period', async (req, res) => {
     }
 
     // Build daily breakdown sorted
-    const daily = Object.entries(dailyMap)
-      .map(([date, revenue]) => ({ date, revenue: Math.round(revenue * 100) / 100 }))
+    const daily = Object.entries(dailyMapCents)
+      .map(([date, cents]) => ({ date, revenue: cents / 100 }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
     // Gap analysis
@@ -1090,7 +1108,7 @@ router.get('/forecast/peak-period', async (req, res) => {
         sku: s.sku,
         product_name: s.product_name,
         peak_units_sold: s.units_sold,
-        peak_revenue: Math.round(s.revenue * 100) / 100,
+        peak_revenue: s.revenueCents / 100,
         current_stock: currentStock,
         stock_gap: gap,
         status,
@@ -1104,7 +1122,7 @@ router.get('/forecast/peak-period', async (req, res) => {
 
     res.json({
       period: { start: period_start, end: period_end },
-      total_revenue: Math.round(totalRevenue * 100) / 100,
+      total_revenue: totalRevenueCents / 100,
       total_units: totalUnits,
       daily,
       sku_breakdown: Object.values(skuMap).map(s => ({
