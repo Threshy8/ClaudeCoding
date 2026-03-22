@@ -17,6 +17,26 @@ function sumVirtualCents(rows, sku) {
 }
 
 /**
+ * Fetch net stock adjustment deltas per SKU from the stock_adjustments table.
+ * Returns { sku: totalDelta } map. These deltas are added to FIFO-derived
+ * quantity_remaining to get the true on-hand count.
+ */
+async function getStockAdjustmentDeltas() {
+  const { data, error } = await supabase
+    .from('stock_adjustments')
+    .select('sku, delta');
+  if (error) {
+    console.error('stock_adjustments query error:', error.message);
+    return {};
+  }
+  const map = {};
+  for (const row of (data || [])) {
+    map[row.sku] = (map[row.sku] || 0) + row.delta;
+  }
+  return map;
+}
+
+/**
  * Average cost method:
  * For each SKU, calculate the weighted average unit cost from all purchases.
  * COGS = units_sold × average_unit_cost
@@ -808,6 +828,9 @@ router.get('/inventory/summary', async (req, res) => {
     if (lotsErr) return res.status(500).json({ error: lotsErr.message });
     if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
 
+    // 1b. Get stock adjustment deltas (physical count corrections)
+    const adjDeltas = await getStockAdjustmentDeltas();
+
     // Group by SKU (accumulate cost in cents)
     const skuMap = {};
     for (const lot of lots) {
@@ -818,6 +841,16 @@ router.get('/inventory/summary', async (req, res) => {
       skuMap[lot.sku].totalCostCents += toCents(lot.unit_cost) * lot.quantity_remaining;
       if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
       if (lot.location) skuMap[lot.sku].locations.add(lot.location);
+    }
+
+    // Apply stock adjustment deltas
+    for (const [sku, delta] of Object.entries(adjDeltas)) {
+      if (skuMap[sku]) {
+        const fifoQty = skuMap[sku].quantity_remaining;
+        const avgCostCents = fifoQty > 0 ? skuMap[sku].totalCostCents / fifoQty : 0;
+        skuMap[sku].quantity_remaining = Math.max(0, fifoQty + delta);
+        skuMap[sku].totalCostCents = Math.round(avgCostCents * skuMap[sku].quantity_remaining);
+      }
     }
 
     // 2. Get sales this calendar month
@@ -883,6 +916,135 @@ router.get('/inventory/summary', async (req, res) => {
     });
   } catch (err) {
     console.error('Inventory summary error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/inventory/adjustment ───────────────────────────────────────────
+// Record a physical stock count adjustment for a single SKU.
+// Looks up current FIFO quantity_remaining, calculates delta, inserts row.
+router.post('/inventory/adjustment', async (req, res) => {
+  const { sku, physical_count, notes, location = 'SCC' } = req.body;
+
+  if (!sku || physical_count == null) {
+    return res.status(400).json({ error: 'sku and physical_count are required' });
+  }
+
+  try {
+    // Get current FIFO-derived stock for this SKU
+    const { data: lots, error: lotsErr } = await supabase
+      .from('purchase_order_lines')
+      .select('quantity_remaining')
+      .eq('sku', sku)
+      .gt('quantity_remaining', 0);
+    if (lotsErr) return res.status(500).json({ error: lotsErr.message });
+
+    const systemCount = (lots || []).reduce((s, l) => s + l.quantity_remaining, 0);
+    const delta = physical_count - systemCount;
+
+    const { data: adj, error: adjErr } = await supabase
+      .from('stock_adjustments')
+      .insert({
+        sku,
+        adjustment_date: new Date().toISOString().slice(0, 10),
+        physical_count,
+        system_count: systemCount,
+        delta,
+        location,
+        notes: notes || null,
+      })
+      .select()
+      .single();
+
+    if (adjErr) return res.status(500).json({ error: adjErr.message });
+
+    res.json({ success: true, adjustment: adj });
+  } catch (err) {
+    console.error('Stock adjustment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/inventory/adjustments/bulk ─────────────────────────────────────
+// Accepts an array of { sku, physical_count } and creates adjustments for each.
+// Deletes previous adjustments for the same location+notes to allow re-uploads.
+router.post('/inventory/adjustments/bulk', async (req, res) => {
+  const { adjustments, notes, location = 'SCC' } = req.body;
+
+  if (!adjustments || !Array.isArray(adjustments) || adjustments.length === 0) {
+    return res.status(400).json({ error: 'adjustments array is required' });
+  }
+
+  try {
+    // If notes match a previous bulk upload, delete those old adjustments first (idempotent re-upload)
+    if (notes) {
+      await supabase
+        .from('stock_adjustments')
+        .delete()
+        .eq('notes', notes)
+        .eq('location', location);
+    }
+
+    // Get all FIFO stock in one query
+    const { data: allLots } = await supabase
+      .from('purchase_order_lines')
+      .select('sku, quantity_remaining')
+      .gt('quantity_remaining', 0);
+
+    const fifoMap = {};
+    for (const lot of (allLots || [])) {
+      fifoMap[lot.sku] = (fifoMap[lot.sku] || 0) + lot.quantity_remaining;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = adjustments.map(a => {
+      const systemCount = fifoMap[a.sku] || 0;
+      return {
+        sku: a.sku,
+        adjustment_date: today,
+        physical_count: a.physical_count,
+        system_count: systemCount,
+        delta: a.physical_count - systemCount,
+        location,
+        notes: notes || null,
+      };
+    });
+
+    const { data, error } = await supabase
+      .from('stock_adjustments')
+      .insert(rows)
+      .select();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const totalDelta = rows.reduce((s, r) => s + r.delta, 0);
+    res.json({
+      success: true,
+      count: data.length,
+      total_delta: totalDelta,
+      adjustments: data,
+    });
+  } catch (err) {
+    console.error('Bulk adjustment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/inventory/adjustments ───────────────────────────────────────────
+// List stock adjustments, optionally filtered by SKU
+router.get('/inventory/adjustments', async (req, res) => {
+  const { sku } = req.query;
+  try {
+    let query = supabase
+      .from('stock_adjustments')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (sku) query = query.eq('sku', sku);
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -992,6 +1154,14 @@ router.get('/forecast/stockout', async (req, res) => {
       }
       skuStock[lot.sku].quantity_remaining += lot.quantity_remaining;
       if (lot.po_number) skuStock[lot.sku].po_numbers.add(lot.po_number);
+    }
+
+    // Apply stock adjustment deltas
+    const adjDeltas = await getStockAdjustmentDeltas();
+    for (const [sku, delta] of Object.entries(adjDeltas)) {
+      if (skuStock[sku]) {
+        skuStock[sku].quantity_remaining = Math.max(0, skuStock[sku].quantity_remaining + delta);
+      }
     }
 
     // Get sales last 30 days for velocity
@@ -1109,6 +1279,12 @@ router.get('/forecast/peak-period', async (req, res) => {
     const stockMap = {};
     for (const lot of (lots || [])) {
       stockMap[lot.sku] = (stockMap[lot.sku] || 0) + lot.quantity_remaining;
+    }
+
+    // Apply stock adjustment deltas
+    const adjDeltas = await getStockAdjustmentDeltas();
+    for (const [sku, delta] of Object.entries(adjDeltas)) {
+      stockMap[sku] = Math.max(0, (stockMap[sku] || 0) + delta);
     }
 
     // Build daily breakdown sorted

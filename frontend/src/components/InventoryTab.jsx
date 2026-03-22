@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
-import { BASE_URL, formatCurrency as _fmt } from '../utils';
+import { BASE_URL, apiFetch, formatCurrency as _fmt } from '../utils';
 
 function getLocation(row) {
   // Use locations from API if available, fallback to 'SCC'
@@ -87,15 +87,45 @@ function extractVariant(productName) {
   return cleaned.slice(family.length).replace(/^\s*[-–—]\s*/, '').trim() || cleaned;
 }
 
+function parseCsvText(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [];
+  const splitRow = (line) => {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (const ch of line) {
+      if (ch === '"') { inQuotes = !inQuotes; continue; }
+      if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; continue; }
+      current += ch;
+    }
+    result.push(current.trim());
+    return result;
+  };
+  const headers = splitRow(lines[0]).map(h => h.toUpperCase().trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = splitRow(lines[i]);
+    if (vals.length < 2) continue;
+    const row = {};
+    headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
+    rows.push(row);
+  }
+  return rows;
+}
+
 export default function InventoryTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [expandedFamilies, setExpandedFamilies] = useState({});
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const fileRef = useRef();
   const { mc, mn } = useDemoMask();
 
-  useEffect(() => {
+  const loadData = useCallback(() => {
     setLoading(true);
     setError(null);
     fetch(`${BASE_URL}/api/inventory/summary?store=au`)
@@ -104,6 +134,56 @@ export default function InventoryTab() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true); setUploadResult(null);
+    try {
+      const text = await file.text();
+      const rows = parseCsvText(text);
+      if (rows.length === 0) throw new Error('No data rows found in CSV');
+
+      // Find SKU and count columns — support multiple naming conventions
+      const first = rows[0];
+      const headers = Object.keys(first);
+      const skuCol = headers.find(h => h === 'EXTERNALID' || h === 'SKU' || h === 'EXTERNAL ID' || h === 'ITEM');
+      const countCol = headers.find(h => h === 'PHYSICAL' || h === 'COUNT' || h === 'QTY' || h === 'QUANTITY' || h === 'ON HAND');
+
+      if (!skuCol || !countCol) {
+        throw new Error(`Could not find SKU and count columns. Found: ${headers.join(', ')}. Expected: ExternalId/SKU + Physical/Count/Qty`);
+      }
+
+      const adjustments = rows
+        .filter(r => r[skuCol] && r[countCol] !== '')
+        .map(r => ({ sku: r[skuCol].trim(), physical_count: parseInt(r[countCol]) || 0 }))
+        .filter(a => a.sku);
+
+      if (adjustments.length === 0) throw new Error('No valid SKU/count rows found');
+
+      const result = await apiFetch('/api/inventory/adjustments/bulk', {
+        method: 'POST',
+        body: JSON.stringify({
+          adjustments,
+          notes: `Physical count upload — ${new Date().toISOString().slice(0, 10)}`,
+          location: 'SCC',
+        }),
+      });
+
+      setUploadResult({
+        type: 'success',
+        text: `Updated ${result.count} SKUs (net delta: ${result.total_delta >= 0 ? '+' : ''}${result.total_delta} units).`,
+      });
+      loadData();
+    } catch (err) {
+      setUploadResult({ type: 'error', text: err.message });
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
 
   const filtered = useMemo(() => {
     if (!data?.skus) return [];
@@ -165,6 +245,21 @@ export default function InventoryTab() {
           </div>
         ))}
       </div>
+
+      {/* Upload Physical Count */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
+          {uploading ? 'Importing...' : '+ Upload Physical Count'}
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} disabled={uploading} />
+        </label>
+      </div>
+
+      {uploadResult && (
+        <div className={`sync-banner ${uploadResult.type}`} style={{ borderRadius: 'var(--radius)', marginBottom: 16 }}>
+          <span>{uploadResult.text}</span>
+          <button className="banner-close" onClick={() => setUploadResult(null)}>✕</button>
+        </div>
+      )}
 
       {/* Search / Filter Bar */}
       <div className="card" style={{ marginBottom: 20, padding: '14px 20px' }}>
