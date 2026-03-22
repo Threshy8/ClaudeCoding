@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
@@ -13,16 +13,23 @@ function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 }
 
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 function fmtRangeLabel(dateRange) {
   if (dateRange.label && dateRange.label !== 'Custom') return dateRange.label;
   if (!dateRange.start || !dateRange.end) return 'Select range';
-  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmt = (iso) => {
     const d = new Date(iso + 'T12:00:00');
     return `${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
   };
   if (dateRange.start === dateRange.end) return fmt(dateRange.start);
   return `${fmt(dateRange.start)} – ${fmt(dateRange.end)}`;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso + 'T12:00:00');
+  return `${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 // Map cryptic NO-SKU identifiers to friendly display names
@@ -49,6 +56,7 @@ function groupByProduct(rows) {
     const units = g.variants.reduce((s, r) => s + (r.units_sold || 0), 0);
     const unitsGross = g.variants.reduce((s, r) => s + (r.units_gross || r.units_sold || 0), 0);
     const unitsReturned = g.variants.reduce((s, r) => s + (r.units_returned || 0), 0);
+    const refundDetails = g.variants.flatMap(r => r.refund_details || []);
     const revenue = g.variants.reduce((s, r) => s + (r.revenue || 0), 0);
     const cogs = g.variants.reduce((s, r) => s + (r.cogs || 0), 0);
     const onHand = g.variants.reduce((s, r) => s + (r.units_on_hand || 0), 0);
@@ -63,6 +71,7 @@ function groupByProduct(rows) {
       units,
       unitsGross,
       unitsReturned,
+      refundDetails,
       avgCost,
       revenue,
       cogs,
@@ -73,6 +82,52 @@ function groupByProduct(rows) {
       variants: g.variants.sort((a, b) => (b.revenue || 0) - (a.revenue || 0)),
     };
   }).sort((a, b) => b.revenue - a.revenue);
+}
+
+function ReturnPopover({ details, mc }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  const close = useCallback(() => setOpen(false), []);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) close();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open, close]);
+
+  if (!details || details.length === 0) return null;
+
+  return (
+    <span className="return-popover-anchor" ref={ref}>
+      <span
+        className="units-return-detail return-popover-trigger"
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+      >
+        −{details.reduce((s, d) => s + (d.quantity || 0), 0)} returned
+      </span>
+      {open && (
+        <div className="return-popover">
+          <div className="return-popover-title">Return Details</div>
+          {details.map((d, i) => (
+            <div key={i} className="return-popover-row">
+              <div className="return-popover-order">
+                #{d.order_number}
+                <span className="return-popover-date">{fmtDate(d.refund_date)}</span>
+              </div>
+              <div className="return-popover-meta">
+                <span>{d.quantity} unit{d.quantity !== 1 ? 's' : ''}</span>
+                <span className="return-popover-amount">{mc(_fmt(d.refund_amount))}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  );
 }
 
 export default function Dashboard({ dateRange }) {
@@ -96,7 +151,6 @@ export default function Dashboard({ dateRange }) {
 
     const params = new URLSearchParams({ start_date: dateRange.start, end_date: dateRange.end, store: 'au' });
 
-    // Fetch FIFO SKU data (fall back to WAC summary if FIFO has no useful cost data)
     const fifoPromise = apiFetch(`/api/cogs/entries/by-sku?${params}`)
       .then(data => {
         const breakdown = data?.sku_breakdown || [];
@@ -138,7 +192,6 @@ export default function Dashboard({ dateRange }) {
 
   const productGroups = groupByProduct(rows);
 
-  // Single source of truth from the backend for the revenue/breakdown figures
   const grossSales = skuData.gross_sales || 0;
   const totalReturns = skuData.total_returns || 0;
   const shippingRevenue = skuData.shipping_revenue || 0;
@@ -162,12 +215,13 @@ export default function Dashboard({ dateRange }) {
     return <span className={`badge ${cls}`}>{mp(m)}</span>;
   };
 
-  const unitsCell = (net, gross, returned) => {
+  const unitsCell = (net, gross, returned, refundDetails) => {
     if (!returned || returned <= 0) return mn(net);
     return (
       <span className="units-with-returns">
         <span>{mn(net)}</span>
-        <span className="units-return-detail">{mn(gross)} sold, −{mn(returned)} returned</span>
+        <span className="units-return-summary">{mn(gross)} sold</span>
+        <ReturnPopover details={refundDetails || []} mc={mc} />
       </span>
     );
   };
@@ -286,7 +340,7 @@ export default function Dashboard({ dateRange }) {
                             )}
                           </span>
                         </td>
-                        <td className="text-right">{unitsCell(group.units, group.unitsGross, group.unitsReturned)}</td>
+                        <td className="text-right">{unitsCell(group.units, group.unitsGross, group.unitsReturned, group.refundDetails)}</td>
                         <td className="text-right">{group.hasCost ? mc(_fmt(group.avgCost)) : <span className="text-muted">—</span>}</td>
                         <td className="text-right">{mc(_fmt(group.revenue))}</td>
                         <td className="text-right">{group.hasCost ? mc(_fmt(group.cogs)) : <span className="text-muted">—</span>}</td>
@@ -306,7 +360,7 @@ export default function Dashboard({ dateRange }) {
                                 <span className="mono">{row.sku}</span>
                               </span>
                             </td>
-                            <td className="text-right">{unitsCell(row.units_sold, row.units_gross, row.units_returned)}</td>
+                            <td className="text-right">{unitsCell(row.units_sold, row.units_gross, row.units_returned, row.refund_details)}</td>
                             <td className="text-right">{rowHasCost ? mc(_fmt(avgCost)) : <span className="text-muted">—</span>}</td>
                             <td className="text-right">{mc(_fmt(row.revenue))}</td>
                             <td className="text-right">{rowHasCost ? mc(_fmt(row.cogs)) : <span className="text-muted">—</span>}</td>
@@ -351,6 +405,7 @@ export default function Dashboard({ dateRange }) {
                     rows.reduce((s, r) => s + (r.units_sold || 0), 0),
                     rows.reduce((s, r) => s + (r.units_gross || r.units_sold || 0), 0),
                     rows.reduce((s, r) => s + (r.units_returned || 0), 0),
+                    rows.flatMap(r => r.refund_details || []),
                   )}</td>
                   <td></td>
                   <td className="text-right">{mc(_fmt(totalCollected))}</td>

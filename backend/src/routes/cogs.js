@@ -49,7 +49,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   //    in which they happen, regardless of when the original order was placed.
   const { data: periodRefunds, error: periodRefundsError } = await supabase
     .from('shopify_refunds')
-    .select('sku, product_name, quantity_refunded, refund_subtotal')
+    .select('sku, product_name, quantity_refunded, refund_subtotal, order_number, refund_date')
     .gte('refund_date', periodStart)
     .lt('refund_date', periodEnd);
 
@@ -90,10 +90,16 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   const periodRefundMap = {};
   for (const r of periodRefunds) {
     if (!periodRefundMap[r.sku]) {
-      periodRefundMap[r.sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0 };
+      periodRefundMap[r.sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0, details: [] };
     }
     periodRefundMap[r.sku].qty += r.quantity_refunded;
     periodRefundMap[r.sku].subtotalCents += toCents(r.refund_subtotal);
+    periodRefundMap[r.sku].details.push({
+      order_number: r.order_number,
+      refund_date: r.refund_date,
+      quantity: r.quantity_refunded,
+      refund_amount: parseFloat(r.refund_subtotal || 0),
+    });
   }
 
   // --- Build period gross sales summary per SKU ---
@@ -144,6 +150,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       units_sold,
       units_gross: d.gross_units,
       units_returned: refund.qty,
+      refund_details: refund.details || [],
       avg_unit_cost: Math.round(avgCost * 100) / 100,
       revenue,
       cogs: Math.round(cogs * 100) / 100,
@@ -573,16 +580,22 @@ router.get('/entries/by-sku', async (req, res) => {
     // Get period refunds (by refund_date) to compute net units/revenue
     const { data: periodRefunds } = await supabase
       .from('shopify_refunds')
-      .select('sku, quantity_refunded, refund_subtotal')
+      .select('sku, quantity_refunded, refund_subtotal, order_number, refund_date')
       .gte('refund_date', start_date)
       .lte('refund_date', end_date)
       .eq('store', store);
 
     const refundMap = {};
     for (const r of (periodRefunds || [])) {
-      if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotalCents: 0 };
+      if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotalCents: 0, details: [] };
       refundMap[r.sku].qty += r.quantity_refunded;
       refundMap[r.sku].subtotalCents += toCents(r.refund_subtotal);
+      refundMap[r.sku].details.push({
+        order_number: r.order_number,
+        refund_date: r.refund_date,
+        quantity: r.quantity_refunded,
+        refund_amount: parseFloat(r.refund_subtotal || 0),
+      });
     }
 
     const skuBreakdown = Object.values(skuMap).map(s => {
@@ -604,6 +617,7 @@ router.get('/entries/by-sku', async (req, res) => {
         units_sold: netUnits,
         units_gross: s.units_sold,
         units_returned: refund.qty,
+        refund_details: refund.details || [],
         avg_unit_cost: s.units_sold > 0 ? Math.round(s.cogsCents / s.units_sold) / 100 : 0,
         revenue: netRevenue,
         cogs: netCogs,
