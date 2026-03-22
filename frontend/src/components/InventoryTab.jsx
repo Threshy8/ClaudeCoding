@@ -1,11 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-const BASE_URL = process.env.REACT_APP_API_URL || '';
-
-function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
+import { BASE_URL, formatCurrency as _fmt } from '../utils';
 
 function getLocation() {
   return 'SCC';

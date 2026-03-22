@@ -2,6 +2,20 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../db/supabase');
 
+// ── Shared helpers ──────────────────────────────────────────────────────────
+
+/** Convert a dollar value to integer cents for accumulation without float drift */
+const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
+
+/** SKUs that represent fees/adjustments, not physical products */
+const VIRTUAL_REFUND_SKUS = ['shipping', 'x-redo', 'tax'];
+
+/** Sum virtual SKU revenue in integer cents */
+function sumVirtualCents(rows, sku) {
+  return (rows || []).filter(r => r.sku === sku)
+    .reduce((s, r) => s + toCents(r.sale_price) * (r.quantity_sold || 0), 0);
+}
+
 /**
  * Average cost method:
  * For each SKU, calculate the weighted average unit cost from all purchases.
@@ -54,9 +68,6 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .lt('refund_date', periodEnd);
 
   if (periodRefundsError) throw new Error(periodRefundsError.message);
-
-  // Helper: convert a dollar value to integer cents
-  const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
 
   // --- Build average cost map per SKU ---
   // totalCostCents accumulates in integer cents to avoid float drift
@@ -192,15 +203,11 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .lt('order_date', periodEnd)
     .in('sku', ['x-redo', 'shipping', 'tax']);
 
-  function _sumVirtualCents(rows, sku) {
-    return (rows || []).filter(r => r.sku === sku)
-      .reduce((s, r) => s + toCents(r.sale_price) * (r.quantity_sold || 0), 0);
-  }
-  const redoFeesCents = _sumVirtualCents(virtualRows, 'x-redo');
+  const redoFeesCents = sumVirtualCents(virtualRows, 'x-redo');
   const redoUnits = (virtualRows || []).filter(r => r.sku === 'x-redo')
     .reduce((s, r) => s + (r.quantity_sold || 0), 0);
-  const shippingTotalCents = _sumVirtualCents(virtualRows, 'shipping');
-  const taxTotalCents = _sumVirtualCents(virtualRows, 'tax');
+  const shippingTotalCents = sumVirtualCents(virtualRows, 'shipping');
+  const taxTotalCents = sumVirtualCents(virtualRows, 'tax');
 
   // --- Sales breakdown (all in integer cents) ---
   // NOTE: sale_price is already net of discounts (discount_allocations subtracted during
@@ -210,9 +217,8 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   const totalDiscounts = 0; // Already baked into sale_price during sync
 
   // Split refunds: product returns vs shipping/virtual SKU refunds
-  const virtualRefundSkus = ['shipping', 'x-redo', 'tax'];
   const totalReturnsCents = Object.entries(periodRefundMap)
-    .filter(([sku]) => !virtualRefundSkus.includes(sku))
+    .filter(([sku]) => !VIRTUAL_REFUND_SKUS.includes(sku))
     .reduce((s, [, d]) => s + d.subtotalCents, 0);
   const shippingRefundsCents = (periodRefundMap['shipping'] || { subtotalCents: 0 }).subtotalCents;
 
@@ -356,8 +362,6 @@ router.get('/orders', async (req, res) => {
     .select('sku, quantity, unit_cost');
   if (pErr) return res.status(500).json({ error: pErr.message });
 
-  const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
-
   // Build avg cost map (cents)
   const costMap = {};
   for (const p of (purchases || [])) {
@@ -453,12 +457,10 @@ router.get('/resends', async (req, res) => {
     .select('sku, quantity, unit_cost');
   if (pErr) return res.status(500).json({ error: pErr.message });
 
-  const toCentsRs = (v) => Math.round(parseFloat(v || 0) * 100);
-
   const costMap = {};
   for (const p of (purchases || [])) {
     if (!costMap[p.sku]) costMap[p.sku] = { totalCostCents: 0, totalQty: 0 };
-    costMap[p.sku].totalCostCents += toCentsRs(p.unit_cost) * p.quantity;
+    costMap[p.sku].totalCostCents += toCents(p.unit_cost) * p.quantity;
     costMap[p.sku].totalQty  += p.quantity;
   }
   const avgCostCents = (sku) => {
@@ -539,9 +541,6 @@ router.get('/entries/by-sku', async (req, res) => {
       .eq('store', store);
     if (eErr) return res.status(500).json({ error: eErr.message });
     if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0, shipping_total: 0, tax_total: 0, gross_sales: 0, total_discounts: 0, total_returns: 0, net_sales: 0, shipping_revenue: 0, total_collected: 0 });
-
-    // Helper: convert a dollar value to integer cents
-    const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
 
     // Group by SKU — accumulate revenue in integer cents
     // Prefer line_revenue_cents (actual Shopify line total) over sale_price * qty
@@ -658,22 +657,17 @@ router.get('/entries/by-sku', async (req, res) => {
       .eq('store', store)
       .in('sku', ['x-redo', 'shipping', 'tax']);
 
-    function _sumVCents(rows, sku) {
-      return (rows || []).filter(r => r.sku === sku)
-        .reduce((s, r) => s + toCents(r.sale_price) * (r.quantity_sold || 0), 0);
-    }
-    const redoFeesCents = _sumVCents(virtualRows, 'x-redo');
+    const redoFeesCents = sumVirtualCents(virtualRows, 'x-redo');
     const redoUnits = (virtualRows || []).filter(r => r.sku === 'x-redo')
       .reduce((s, r) => s + (r.quantity_sold || 0), 0);
-    const shippingTotalCents = _sumVCents(virtualRows, 'shipping');
-    const taxTotalCents = _sumVCents(virtualRows, 'tax');
+    const shippingTotalCents = sumVirtualCents(virtualRows, 'shipping');
+    const taxTotalCents = sumVirtualCents(virtualRows, 'tax');
 
     // Sales breakdown — all in integer cents
     const grossSalesCents = Object.values(skuMap).reduce((s, d) => s + d.revenueCents, 0);
     const totalDiscounts = 0; // Already baked into sale_price during sync
-    const virtualRefundSkus = ['shipping', 'x-redo', 'tax'];
     const totalReturnsCents = Object.entries(refundMap)
-      .filter(([sku]) => !virtualRefundSkus.includes(sku))
+      .filter(([sku]) => !VIRTUAL_REFUND_SKUS.includes(sku))
       .reduce((s, [, d]) => s + d.subtotalCents, 0);
     const shippingRefundsCents = (refundMap['shipping'] || { subtotalCents: 0 }).subtotalCents;
     const netSalesCents = grossSalesCents - totalReturnsCents;
@@ -738,7 +732,7 @@ router.get('/entries/by-order', async (req, res) => {
       if (s.customer_name) customerMap[s.shopify_order_id] = s.customer_name;
     }
 
-    const toCentsLocal = (v) => Math.round(parseFloat(v || 0) * 100);
+
 
     // Group by order (accumulate in cents)
     // Prefer line_revenue_cents over sale_price * qty for revenue
@@ -763,8 +757,8 @@ router.get('/entries/by-order', async (req, res) => {
       const qty = e.quantity_sold || 0;
       const revCents = e.line_revenue_cents != null
         ? e.line_revenue_cents
-        : toCentsLocal(e.sale_price) * qty;
-      const cogsCents = toCentsLocal(e.total_unit_cogs) * qty;
+        : toCents(e.sale_price) * qty;
+      const cogsCents = toCents(e.total_unit_cogs) * qty;
       o.line_items.push({
         sku: e.sku,
         product_name: e.product_name,
@@ -814,8 +808,6 @@ router.get('/inventory/summary', async (req, res) => {
     if (lotsErr) return res.status(500).json({ error: lotsErr.message });
     if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
 
-    const toCentsInv = (v) => Math.round(parseFloat(v || 0) * 100);
-
     // Group by SKU (accumulate cost in cents)
     const skuMap = {};
     for (const lot of lots) {
@@ -823,7 +815,7 @@ router.get('/inventory/summary', async (req, res) => {
         skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set() };
       }
       skuMap[lot.sku].quantity_remaining += lot.quantity_remaining;
-      skuMap[lot.sku].totalCostCents += toCentsInv(lot.unit_cost) * lot.quantity_remaining;
+      skuMap[lot.sku].totalCostCents += toCents(lot.unit_cost) * lot.quantity_remaining;
       if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
     }
 
@@ -855,7 +847,7 @@ router.get('/inventory/summary', async (req, res) => {
     for (const s of (recentSales || [])) {
       if (!salePriceMap[s.sku]) salePriceMap[s.sku] = { totalRevCents: 0, totalQty: 0 };
       const qty = s.quantity_sold || 0;
-      salePriceMap[s.sku].totalRevCents += toCentsInv(s.sale_price) * qty;
+      salePriceMap[s.sku].totalRevCents += toCents(s.sale_price) * qty;
       salePriceMap[s.sku].totalQty += qty;
     }
 
@@ -913,11 +905,10 @@ router.get('/forecast/revenue', async (req, res) => {
     if (sErr) return res.status(500).json({ error: sErr.message });
 
     // Build daily revenue map (in cents)
-    const toCentsFc = (v) => Math.round(parseFloat(v || 0) * 100);
     const dailyMapCents = {};
     for (const s of (sales || [])) {
       const d = s.order_date;
-      const revCents = s.line_revenue != null ? toCentsFc(s.line_revenue) : toCentsFc(s.sale_price) * (s.quantity_sold || 0);
+      const revCents = s.line_revenue != null ? toCents(s.line_revenue) : toCents(s.sale_price) * (s.quantity_sold || 0);
       dailyMapCents[d] = (dailyMapCents[d] || 0) + revCents;
     }
 
@@ -1087,7 +1078,6 @@ router.get('/forecast/peak-period', async (req, res) => {
     if (sErr) return res.status(500).json({ error: sErr.message });
 
     // Daily breakdown (accumulate in cents)
-    const toCentsPk = (v) => Math.round(parseFloat(v || 0) * 100);
     const dailyMapCents = {};
     const skuMap = {};
     let totalRevenueCents = 0;
@@ -1095,7 +1085,7 @@ router.get('/forecast/peak-period', async (req, res) => {
 
     for (const s of (sales || [])) {
       const qty = s.quantity_sold || 0;
-      const revCents = s.line_revenue != null ? toCentsPk(s.line_revenue) : toCentsPk(s.sale_price) * qty;
+      const revCents = s.line_revenue != null ? toCents(s.line_revenue) : toCents(s.sale_price) * qty;
       totalRevenueCents += revCents;
       totalUnits += qty;
 

@@ -353,7 +353,7 @@ router.post('/shopify', async (req, res) => {
         }
       }
     } catch (err) {
-      console.log(`[Redo Return] Could not fetch product prices: ${err.message}`);
+      // product price lookup failed — non-fatal, continue with origPriceMap fallback
     }
 
     const base = storeUrl.replace(/\/$/, '');
@@ -398,7 +398,7 @@ router.post('/shopify', async (req, res) => {
             );
             originalOrder = (origRes.data.orders || []).find(o => o.name === origName);
           } catch (err) {
-            console.log(`[Redo Return] Could not fetch original order ${origName}: ${err.message}`);
+            // original order lookup failed — will fall back to product list price
           }
         }
       }
@@ -429,7 +429,7 @@ router.post('/shopify', async (req, res) => {
           priceSource = 'current list price';
         }
         if (unitPrice <= 0) {
-          console.log(`[Redo Return] Skipping ${order.name} sku=${sku}: could not determine sale price`);
+          // no price available — skip this line item
           continue;
         }
 
@@ -446,7 +446,6 @@ router.post('/shopify', async (req, res) => {
           refund_date:       closedDate,
           store,
         });
-        console.log(`[Redo Return] ${order.name} sku=${sku} qty=${qty} value=$${subtotal} (${priceSource}) return_date=${closedDate}`);
       }
     }
 

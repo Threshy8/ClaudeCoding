@@ -1,17 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-const BASE_URL = process.env.REACT_APP_API_URL || '';
-
-async function apiFetch(path) {
-  const res = await fetch(`${BASE_URL}${path}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
+import { apiFetch, formatCurrency as _fmt } from '../utils';
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 

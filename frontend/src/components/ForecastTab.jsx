@@ -1,30 +1,9 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ReferenceLine, ReferenceArea,
 } from 'recharts';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-const BASE_URL = process.env.REACT_APP_API_URL || '';
-
-async function apiFetch(path) {
-  const res = await fetch(`${BASE_URL}${path}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
-
-function _fmtFull(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
-
-function fmtDate(d) {
-  if (!d) return '—';
-  const [y, m, day] = d.split('-');
-  return `${day}/${m}/${y}`;
-}
+import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
 function fmtShortDate(d) {
   if (!d) return '';
@@ -96,7 +75,7 @@ function ChartTooltip({ active, payload, label }) {
             <span style={{ width: 8, height: 3, borderRadius: 1, background: p.color, display: 'inline-block' }} />
             <span style={{ color: 'var(--text-body)' }}>{p.name}</span>
           </span>
-          <span style={{ fontWeight: 600, color: 'var(--text)' }}>{_fmtFull(p.value)}</span>
+          <span style={{ fontWeight: 600, color: 'var(--text)' }}>{_fmt(p.value)}</span>
         </div>
       ))}
     </div>
@@ -467,19 +446,19 @@ function PeakPeriod({ mc, mn }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const fetchData = () => {
+  const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
     apiFetch(`/api/forecast/peak-period?store=au&period_start=${periodStart}&period_end=${periodEnd}`)
       .then(setData)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
-  };
+  }, [periodStart, periodEnd]);
 
   const [didLoad, setDidLoad] = useState(false);
   useEffect(() => {
     if (!didLoad) { fetchData(); setDidLoad(true); }
-  }, [didLoad]); // eslint-disable-line
+  }, [didLoad, fetchData]);
 
   return (
     <div>
@@ -580,7 +559,7 @@ function PeakPeriod({ mc, mn }) {
                         <td><span className="mono">{row.sku}</span></td>
                         <td>{row.product_name}</td>
                         <td className="text-right">{mn(row.peak_units_sold)}</td>
-                        <td className="text-right">{mc(_fmtFull(row.peak_revenue))}</td>
+                        <td className="text-right">{mc(_fmt(row.peak_revenue))}</td>
                         <td className="text-right" style={{ fontWeight: 600 }}>{mn(row.current_stock)}</td>
                         <td className="text-right" style={{
                           fontWeight: 700,

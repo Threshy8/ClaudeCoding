@@ -1,27 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-const BASE_URL = process.env.REACT_APP_API_URL || '';
-
-async function apiFetch(path, opts = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    ...opts,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-function fmtDate(d) {
-  if (!d) return '—';
-  const [y, m, day] = d.split('-');
-  return `${day}/${m}/${y}`;
-}
-
-function _fmt(n) {
-  if (n == null) return '—';
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n));
-}
+import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
 function daysBetween(d1, d2) {
   if (!d1 || !d2) return null;

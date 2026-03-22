@@ -2,10 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { getCogsSummary, exportJournal } from '../api';
 import { triggerLabel } from './DateRangePicker';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
+import { formatCurrency as _fmt } from '../utils';
 
 function downloadCsv(content, filename) {
   const blob = new Blob([content], { type: 'text/csv' });

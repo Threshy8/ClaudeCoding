@@ -1,32 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-const BASE_URL = process.env.REACT_APP_API_URL || '';
-
-async function apiFetch(path, opts = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    ...opts,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-async function apiFetchMultipart(path, body) {
-  const res = await fetch(`${BASE_URL}${path}`, { method: 'POST', body });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
-
-function fmtDate(d) {
-  if (!d) return '—';
-  const [y, m, day] = d.split('-');
-  return `${day}/${m}/${y}`;
-}
+import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 function StatusBadge({ status }) {

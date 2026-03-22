@@ -2,24 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { getCogsSummary } from '../api';
 import { triggerLabel } from './DateRangePicker';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-const BASE_URL = process.env.REACT_APP_API_URL || '';
-
-async function apiFetch(path) {
-  const res = await fetch(`${BASE_URL}${path}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
-
-function fmtDate(d) {
-  if (!d) return '—';
-  const [y, m, day] = d.split('-');
-  return `${day}/${m}/${y}`;
-}
+import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
 function MarginBadge({ pct }) {
   const { mp } = useDemoMask();

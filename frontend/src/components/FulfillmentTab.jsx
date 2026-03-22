@@ -1,30 +1,11 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
-
-const BASE_URL = process.env.REACT_APP_API_URL || '';
-
-function _fmt(n) {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
-}
-function fmtDate(d) {
-  if (!d) return '—';
-  const [y, m, day] = d.split('-');
-  return `${day}/${m}/${y}`;
-}
+import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
 const CATEGORY_COLOR  = { inbound: '#3b82f6', outbound: '#f59e0b', delivery: '#06b6d4', other: '#8b5cf6' };
 const CATEGORY_LABEL  = { inbound: 'Inbound',  outbound: 'Outbound', delivery: 'Delivery', other: 'Other'  };
 const COST_TYPE_COLOR = { variable: '#10b981', fixed: '#6b7280' };
 const COST_TYPE_LABEL = { variable: 'Variable', fixed: 'Fixed' };
-
-async function apiFetch(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, options);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `Request failed: ${res.status}`);
-  }
-  return res.json();
-}
 
 export default function FulfillmentTab({ dateRange }) {
   const [view, setView] = useState('invoices'); // 'invoices' | 'costsheet'
