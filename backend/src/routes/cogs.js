@@ -1145,5 +1145,25 @@ router.get('/forecast/peak-period', async (req, res) => {
   }
 });
 
+// POST /api/cogs/recompute — full FIFO recompute from scratch
+const { recomputeAllCogs } = require('../utils/fifo');
+
+router.post('/recompute', async (req, res) => {
+  try {
+    const store = req.body?.store || 'au';
+    const startDate = req.body?.start_date || '2026-03-12';
+    const result = await recomputeAllCogs(store, startDate);
+    res.json({
+      success: true,
+      entries_created: result.processed,
+      skipped_no_lot: result.skipped_no_lot?.length || 0,
+      errors: result.errors,
+    });
+  } catch (err) {
+    console.error('Recompute error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.buildCogsData = buildCogsData;
