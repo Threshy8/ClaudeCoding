@@ -803,7 +803,7 @@ router.get('/inventory/summary', async (req, res) => {
     // 1. Get all lots with remaining stock
     const { data: lots, error: lotsErr } = await supabase
       .from('purchase_order_lines')
-      .select('sku, product_name, unit_cost, quantity_remaining, po_number')
+      .select('sku, product_name, unit_cost, quantity_remaining, po_number, location')
       .gt('quantity_remaining', 0);
     if (lotsErr) return res.status(500).json({ error: lotsErr.message });
     if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
@@ -812,11 +812,12 @@ router.get('/inventory/summary', async (req, res) => {
     const skuMap = {};
     for (const lot of lots) {
       if (!skuMap[lot.sku]) {
-        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set() };
+        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set(), locations: new Set() };
       }
       skuMap[lot.sku].quantity_remaining += lot.quantity_remaining;
       skuMap[lot.sku].totalCostCents += toCents(lot.unit_cost) * lot.quantity_remaining;
       if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
+      if (lot.location) skuMap[lot.sku].locations.add(lot.location);
     }
 
     // 2. Get sales this calendar month
@@ -866,6 +867,7 @@ router.get('/inventory/summary', async (req, res) => {
         retail_value: Math.round(s.quantity_remaining * avgSalePriceCents) / 100,
         units_sold_this_month: monthSoldMap[s.sku] || 0,
         po_numbers: [...s.po_numbers],
+        locations: [...s.locations],
         low_stock: s.quantity_remaining < 10,
       };
     });

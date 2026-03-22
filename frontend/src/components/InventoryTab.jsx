@@ -2,8 +2,9 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
 import { BASE_URL, formatCurrency as _fmt } from '../utils';
 
-function getLocation() {
-  return 'SCC';
+function getLocation(row) {
+  // Use locations from API if available, fallback to 'SCC'
+  return (row.locations && row.locations.length > 0) ? row.locations[0] : 'SCC';
 }
 
 const LOCATION_COLORS = {
@@ -244,7 +245,7 @@ export default function InventoryTab() {
                         <td>
                           {/* Show unique locations */}
                           <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                            {[...new Set(fam.skus.map(s => getLocation(s.sku)))].map(loc => (
+                            {[...new Set(fam.skus.map(s => getLocation(s)))].map(loc => (
                               <LocationBadge key={loc} location={loc} />
                             ))}
                           </span>
@@ -278,7 +279,7 @@ export default function InventoryTab() {
                               {row.low_stock && <LowStockBadge />}
                             </div>
                           </td>
-                          <td><LocationBadge location={getLocation(row.sku)} /></td>
+                          <td><LocationBadge location={getLocation(row)} /></td>
                           <td className="text-right">
                             <StockBar
                               current={mn(row.quantity_remaining)}
