@@ -25,6 +25,16 @@ function fmtRangeLabel(dateRange) {
   return `${fmt(dateRange.start)} – ${fmt(dateRange.end)}`;
 }
 
+// Map cryptic NO-SKU identifiers to friendly display names
+function friendlyProductName(sku, productName) {
+  if (/^NO-SKU-/i.test(sku || '')) {
+    // Use product_name if it's meaningful, otherwise map common patterns
+    if (productName && !/^NO-SKU/i.test(productName)) return productName;
+    return 'Item Personalisation';
+  }
+  return productName || sku;
+}
+
 export default function Dashboard({ dateRange }) {
   const [skuData, setSkuData] = useState(null);
   const [inventory, setInventory] = useState(null);
@@ -41,15 +51,25 @@ export default function Dashboard({ dateRange }) {
 
     const params = new URLSearchParams({ start_date: dateRange.start, end_date: dateRange.end, store: 'au' });
 
-    // Fetch FIFO SKU data (fall back to WAC summary), and inventory in parallel
+    // Fetch FIFO SKU data (fall back to WAC summary if FIFO has no useful cost data)
     const fifoPromise = apiFetch(`/api/cogs/entries/by-sku?${params}`)
       .then(data => {
-        if (data?.sku_breakdown?.length > 0) {
+        const breakdown = data?.sku_breakdown || [];
+        const hasCostData = breakdown.some(r => (r.cogs || 0) > 0);
+        if (breakdown.length > 0 && hasCostData) {
           setIsFifo(true);
           return data;
         }
-        // Fall back to WAC
-        return apiFetch(`/api/cogs/summary?${params}`);
+        // FIFO has no entries or all COGS are zero — try WAC
+        return apiFetch(`/api/cogs/summary?${params}`).then(wac => {
+          const wacHasCost = (wac?.sku_breakdown || []).some(r => (r.cogs || 0) > 0);
+          if (!wacHasCost && breakdown.length > 0) {
+            // WAC also has no cost data — use FIFO anyway (it has revenue)
+            setIsFifo(true);
+            return data;
+          }
+          return wac;
+        });
       })
       .catch(() => apiFetch(`/api/cogs/summary?${params}`));
 
@@ -69,7 +89,9 @@ export default function Dashboard({ dateRange }) {
   if (!skuData) return null;
 
   const VIRTUAL_SKUS = ['x-redo', 'shipping', 'tax'];
-  const rows = (skuData.sku_breakdown || []).filter(r => !VIRTUAL_SKUS.includes((r.sku || '').toLowerCase()));
+  const rows = (skuData.sku_breakdown || [])
+    .filter(r => !VIRTUAL_SKUS.includes((r.sku || '').toLowerCase()))
+    .sort((a, b) => (b.revenue || 0) - (a.revenue || 0));
 
   // Single source of truth from the backend for the revenue/breakdown figures
   const grossSales = skuData.gross_sales || 0;
@@ -87,6 +109,9 @@ export default function Dashboard({ dateRange }) {
 
   const rangeLabel = fmtRangeLabel(dateRange);
 
+  // Check if we have any cost data at all
+  const hasCostData = rows.some(r => (r.cogs || 0) > 0 || (r.avg_unit_cost || 0) > 0);
+
   return (
     <div>
       <div className="kpi-grid">
@@ -97,7 +122,7 @@ export default function Dashboard({ dateRange }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-label">True COGS</div>
-          <div className="kpi-value red">{mc(_fmt(totalCogs))}</div>
+          <div className="kpi-value red">{hasCostData ? mc(_fmt(totalCogs)) : '—'}</div>
           <div className="kpi-sub">{isFifo ? 'FIFO costing' : 'Weighted avg cost'}</div>
         </div>
         <div className="kpi-card">
@@ -107,7 +132,7 @@ export default function Dashboard({ dateRange }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-label">Gross Margin</div>
-          <div className={`kpi-value ${marginClass}`}>{margin != null ? mp(margin) : '—'}</div>
+          <div className={`kpi-value ${marginClass}`}>{margin != null && hasCostData ? mp(margin) : '—'}</div>
           <div className="kpi-sub">(Revenue − COGS) / Revenue</div>
         </div>
       </div>
@@ -167,12 +192,12 @@ export default function Dashboard({ dateRange }) {
           <div className="empty">No sales data for this period. Sync Shopify or log purchases first.</div>
         ) : (
           <div className="table-wrap">
-            <table>
+            <table className="sku-table">
               <thead>
                 <tr>
                   <th>SKU</th>
                   <th>Product</th>
-                  <th className="text-right">Units Sold</th>
+                  <th className="text-right">Units</th>
                   <th className="text-right">Avg Cost</th>
                   <th className="text-right">Revenue</th>
                   <th className="text-right">COGS</th>
@@ -184,28 +209,30 @@ export default function Dashboard({ dateRange }) {
               <tbody>
                 {rows.map((row) => {
                   const avgCost = row.units_sold > 0 ? row.cogs / row.units_sold : row.avg_unit_cost || 0;
+                  const rowHasCost = (row.cogs || 0) > 0 || (avgCost || 0) > 0;
                   const profit = (row.revenue || 0) - (row.cogs || 0);
-                  const m = row.revenue > 0 ? Math.round(profit / row.revenue * 100) : null;
-                  const mClass = m == null ? '' : m >= 30 ? 'badge-green' : m >= 10 ? 'badge-yellow' : 'badge-red';
+                  const m = row.revenue > 0 && rowHasCost ? Math.round(profit / row.revenue * 100) : null;
+                  const mClass = m == null ? '' : m >= 50 ? 'badge-green' : m >= 20 ? 'badge-yellow' : 'badge-red';
+                  const isNoSku = /^NO-SKU-/i.test(row.sku || '');
                   return (
                     <tr key={row.sku}>
-                      <td><span className="mono">{row.sku}</span></td>
-                      <td>{row.product_name}</td>
+                      <td><span className={isNoSku ? 'sku-nosku' : 'mono'}>{isNoSku ? 'CUSTOM' : row.sku}</span></td>
+                      <td>{friendlyProductName(row.sku, row.product_name)}</td>
                       <td className="text-right">{mn(row.units_sold)}</td>
-                      <td className="text-right">{mc(_fmt(avgCost))}</td>
+                      <td className="text-right">{rowHasCost ? mc(_fmt(avgCost)) : <span className="text-muted">—</span>}</td>
                       <td className="text-right">{mc(_fmt(row.revenue))}</td>
-                      <td className="text-right">{mc(_fmt(row.cogs))}</td>
+                      <td className="text-right">{rowHasCost ? mc(_fmt(row.cogs)) : <span className="text-muted">—</span>}</td>
                       <td className="text-right">
                         {m != null ? <span className={`badge ${mClass}`}>{mp(m)}</span> : <span className="text-muted">—</span>}
                       </td>
                       <td className="text-right">{mn(row.units_on_hand)}</td>
-                      <td className="text-right">{mc(_fmt(row.inventory_value))}</td>
+                      <td className="text-right">{row.inventory_value > 0 ? mc(_fmt(row.inventory_value)) : <span className="text-muted">—</span>}</td>
                     </tr>
                   );
                 })}
                 {redoFees > 0 && (
                   <tr key="x-redo">
-                    <td><span className="mono">x-redo</span></td>
+                    <td><span className="sku-virtual">REDO</span></td>
                     <td>Redo Returns Fee</td>
                     <td className="text-right">{mn(skuData.redo_units || 0)}</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
@@ -218,7 +245,7 @@ export default function Dashboard({ dateRange }) {
                 )}
                 {shippingRevenue > 0 && (
                   <tr key="shipping">
-                    <td><span className="mono">shipping</span></td>
+                    <td><span className="sku-virtual">SHIP</span></td>
                     <td>Shipping Charges</td>
                     <td className="text-right"><span className="text-muted">—</span></td>
                     <td className="text-right"><span className="text-muted">—</span></td>
@@ -231,15 +258,15 @@ export default function Dashboard({ dateRange }) {
                 )}
               </tbody>
               <tfoot>
-                <tr style={{ borderTop: '2px solid var(--border-light)', fontWeight: 700 }}>
-                  <td colSpan={2} style={{ color: 'var(--text-muted)', fontSize: 12 }}>TOTAL</td>
+                <tr>
+                  <td colSpan={2}>TOTAL</td>
                   <td className="text-right">{mn(rows.reduce((s, r) => s + r.units_sold, 0))}</td>
                   <td></td>
                   <td className="text-right">{mc(_fmt(totalCollected))}</td>
-                  <td className="text-right">{mc(_fmt(totalCogs))}</td>
+                  <td className="text-right">{hasCostData ? mc(_fmt(totalCogs)) : <span className="text-muted">—</span>}</td>
                   <td className="text-right">
-                    {margin != null
-                      ? <span className={`badge ${margin >= 30 ? 'badge-green' : margin >= 10 ? 'badge-yellow' : 'badge-red'}`}>{mp(margin)}</span>
+                    {margin != null && hasCostData
+                      ? <span className={`badge ${margin >= 50 ? 'badge-green' : margin >= 20 ? 'badge-yellow' : 'badge-red'}`}>{mp(margin)}</span>
                       : <span className="text-muted">—</span>}
                   </td>
                   <td className="text-right">{mn(rows.reduce((s, r) => s + (r.units_on_hand || 0), 0))}</td>

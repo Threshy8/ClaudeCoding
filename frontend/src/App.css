@@ -436,6 +436,28 @@ tfoot td {
 .text-muted { color: var(--text-muted); }
 .mono       { font-family: 'SF Mono', 'Fira Mono', 'Menlo', monospace; font-size: 12px; }
 
+/* ===== SKU Labels ===== */
+.sku-nosku {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: var(--accent-dim);
+  color: var(--accent-deep);
+}
+.sku-virtual {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: rgba(138, 132, 128, 0.1);
+  color: var(--text-muted);
+}
+
 /* ===== Badges ===== */
 .badge {
   display: inline-block;
