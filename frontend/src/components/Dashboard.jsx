@@ -193,9 +193,10 @@ export default function Dashboard({ dateRange }) {
   const shippingRevenue = skuData.shipping_revenue || 0;
   const redoFees = skuData.redo_fees || 0;
   const totalCollected = skuData.total_collected || 0;
+  const netSales = skuData.net_sales || (grossSales - totalReturns);
   const totalCogs = rows.reduce((s, r) => s + (r.cogs || 0), 0);
   const shippingCosts = freight?.total_cost || 0;
-  const netProductRevenue = grossSales - totalReturns;
+  const netProductRevenue = netSales;
   const grossProfit = netProductRevenue - totalCogs - shippingCosts;
   const margin = netProductRevenue > 0 ? Math.round(grossProfit / netProductRevenue * 100) : null;
   const marginClass = margin == null ? '' : margin >= 30 ? 'green' : margin >= 10 ? 'accent' : 'red';
@@ -227,8 +228,8 @@ export default function Dashboard({ dateRange }) {
     <div>
       <div className="kpi-grid">
         <div className="kpi-card">
-          <div className="kpi-label">Revenue</div>
-          <div className="kpi-value">{mc(_fmt(totalCollected))}</div>
+          <div className="kpi-label">Net Sales</div>
+          <div className="kpi-value">{mc(_fmt(netSales))}</div>
           <div className="kpi-sub">{rangeLabel}</div>
         </div>
         <div className="kpi-card">
