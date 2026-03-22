@@ -193,7 +193,7 @@ export default function App() {
       {/* Tab content */}
       <DemoModeContext.Provider value={demoMode}>
         <main className="main-content">
-          {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} onDateRangeChange={setDateRange} />}
+          {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} />}
           {activeTab === 'Inventory'       && <InventoryTab />}
           {activeTab === 'Forecast'        && <ForecastTab />}
           {activeTab === 'Stock Purchases' && <PurchasesTab />}

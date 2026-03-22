@@ -659,6 +659,11 @@ textarea { resize: vertical; min-height: 70px; }
 }
 .drp-arrow { color: var(--text-dim); font-size: 10px; }
 
+.drp-trigger-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
 .drp-dropdown {
   position: absolute;
   top: calc(100% + 8px);
@@ -669,6 +674,19 @@ textarea { resize: vertical; min-height: 70px; }
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
+  animation: drp-open 0.18s ease-out;
+  transform-origin: top right;
+}
+.drp-dropdown.drp-closing {
+  animation: drp-close 0.15s ease-in forwards;
+}
+@keyframes drp-open {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes drp-close {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.96) translateY(-4px); }
 }
 
 .drp-body { display: flex; }
@@ -838,92 +856,6 @@ textarea { resize: vertical; min-height: 70px; }
 .drp-apply-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .drp-apply-btn:hover:not(:disabled) { background: var(--accent-deep); }
 
-/* ===== Dashboard Date Range Bar ===== */
-.dash-range-bar {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-}
-
-.dash-range-presets {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.dash-range-btn {
-  background: var(--bg-card);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  padding: 7px 16px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
-  box-shadow: var(--shadow-xs);
-}
-
-.dash-range-btn:hover {
-  border-color: var(--accent);
-  color: var(--text);
-  background: var(--accent-dim2);
-}
-
-.dash-range-btn.dash-range-active {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--accent-deep);
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgba(201, 168, 76, 0.18);
-}
-
-.dash-range-divider {
-  width: 1px;
-  height: 24px;
-  background: var(--border);
-  margin: 0 14px;
-  flex-shrink: 0;
-}
-
-.dash-range-custom {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.dash-range-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-}
-
-.dash-range-input {
-  background: var(--bg-card);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-body);
-  padding: 6px 10px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  width: 140px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-  box-shadow: var(--shadow-xs);
-}
-
-.dash-range-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
 
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
@@ -934,7 +866,9 @@ textarea { resize: vertical; min-height: 70px; }
   .dashboard-grid { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: 1fr 1fr; }
-  .drp-dropdown { right: auto; left: 0; }
+  .drp-dropdown { right: auto; left: 0; transform-origin: top left; }
   .drp-cals { flex-direction: column; }
   .drp-cals-divider { display: none; }
+  .drp-body { flex-direction: column; }
+  .drp-presets { flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border-light); }
 }

@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { triggerLabel } from './DateRangePicker';
 import { useDemoMask } from '../contexts/DemoModeContext';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
@@ -14,56 +13,25 @@ function _fmt(n) {
   return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 }
 
-function toIso(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function fmtRangeLabel(dateRange) {
+  if (dateRange.label && dateRange.label !== 'Custom') return dateRange.label;
+  if (!dateRange.start || !dateRange.end) return 'Select range';
+  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fmt = (iso) => {
+    const d = new Date(iso + 'T12:00:00');
+    return `${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
+  };
+  if (dateRange.start === dateRange.end) return fmt(dateRange.start);
+  return `${fmt(dateRange.start)} – ${fmt(dateRange.end)}`;
 }
 
-function buildDashboardPresets() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const today = toIso(now);
-  const pad = (n) => String(n).padStart(2, '0');
-
-  // Monday of this week
-  const dayOfWeek = (now.getDay() + 6) % 7; // 0 = Monday
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - dayOfWeek);
-  const weekStart = toIso(monday);
-
-  const thisMonthStart = `${y}-${pad(m + 1)}-01`;
-
-  const lastM = m === 0 ? 11 : m - 1;
-  const lastY = m === 0 ? y - 1 : y;
-  const lastMonthStart = `${lastY}-${pad(lastM + 1)}-01`;
-  const lastMonthEnd = toIso(new Date(y, m, 0));
-
-  const l3m = m - 2;
-  const l3y = l3m < 0 ? y - 1 : y;
-  const l3mAdj = ((l3m % 12) + 12) % 12;
-  const last3Start = `${l3y}-${pad(l3mAdj + 1)}-01`;
-
-  const thisYearStart = `${y}-01-01`;
-
-  return [
-    { label: 'Today',         start: today,          end: today },
-    { label: 'This Week',     start: weekStart,      end: today },
-    { label: 'This Month',    start: thisMonthStart, end: today },
-    { label: 'Last Month',    start: lastMonthStart, end: lastMonthEnd },
-    { label: 'Last 3 Months', start: last3Start,     end: lastMonthEnd },
-    { label: 'This Year',     start: thisYearStart,  end: today },
-  ];
-}
-
-export default function Dashboard({ dateRange, onDateRangeChange }) {
+export default function Dashboard({ dateRange }) {
   const [skuData, setSkuData] = useState(null);
   const [inventory, setInventory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isFifo, setIsFifo] = useState(false);
   const { mc, mn, mp } = useDemoMask();
-
-  const presets = buildDashboardPresets();
 
   useEffect(() => {
     if (!dateRange?.start || !dateRange?.end) return;
@@ -117,52 +85,10 @@ export default function Dashboard({ dateRange, onDateRangeChange }) {
 
   const inventoryValue = inventory?.total_inventory_value ?? skuData.total_inventory_value ?? 0;
 
-  const rangeLabel = triggerLabel(dateRange);
+  const rangeLabel = fmtRangeLabel(dateRange);
 
   return (
     <div>
-      {/* Date range preset buttons + custom date inputs */}
-      <div className="dash-range-bar">
-        <div className="dash-range-presets">
-          {presets.map((p) => (
-            <button
-              key={p.label}
-              className={`dash-range-btn${dateRange.label === p.label ? ' dash-range-active' : ''}`}
-              onClick={() => onDateRangeChange({ start: p.start, end: p.end, label: p.label })}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <div className="dash-range-divider" />
-        <div className="dash-range-custom">
-          <label className="dash-range-label">From</label>
-          <input
-            type="date"
-            className="dash-range-input"
-            value={dateRange.start || ''}
-            onChange={(e) => {
-              const start = e.target.value;
-              if (start && dateRange.end && start <= dateRange.end) {
-                onDateRangeChange({ start, end: dateRange.end, label: 'Custom' });
-              }
-            }}
-          />
-          <label className="dash-range-label">To</label>
-          <input
-            type="date"
-            className="dash-range-input"
-            value={dateRange.end || ''}
-            onChange={(e) => {
-              const end = e.target.value;
-              if (end && dateRange.start && end >= dateRange.start) {
-                onDateRangeChange({ start: dateRange.start, end, label: 'Custom' });
-              }
-            }}
-          />
-        </div>
-      </div>
-
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-label">Revenue</div>

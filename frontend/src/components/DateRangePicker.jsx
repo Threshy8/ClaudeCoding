@@ -8,7 +8,6 @@ const MONTH_NAMES = [
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function toIso(d) {
-  // Returns local date as YYYY-MM-DD without UTC shift
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
@@ -27,11 +26,17 @@ function buildPresets() {
   const today = toIso(now);
   const pad = (n) => String(n).padStart(2, '0');
 
+  // Monday of this week
+  const dayOfWeek = (now.getDay() + 6) % 7; // 0 = Monday
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - dayOfWeek);
+  const weekStart = toIso(monday);
+
   const thisMonthStart = `${y}-${pad(m + 1)}-01`;
 
   const [lastY, lastM] = shiftMonths(y, m, -1);
   const lastMonthStart = `${lastY}-${pad(lastM + 1)}-01`;
-  const lastMonthEnd = toIso(new Date(y, m, 0)); // day 0 of current month = last day of previous month
+  const lastMonthEnd = toIso(new Date(y, m, 0));
 
   const [l3y, l3m] = shiftMonths(y, m, -2);
   const last3Start = `${l3y}-${pad(l3m + 1)}-01`;
@@ -39,11 +44,12 @@ function buildPresets() {
   const thisYearStart = `${y}-01-01`;
 
   return [
+    { label: 'Today',         start: today,          end: today },
+    { label: 'This Week',     start: weekStart,      end: today },
     { label: 'This Month',    start: thisMonthStart, end: today },
     { label: 'Last Month',    start: lastMonthStart, end: lastMonthEnd },
     { label: 'Last 3 Months', start: last3Start,     end: lastMonthEnd },
     { label: 'This Year',     start: thisYearStart,  end: today },
-    { label: 'All Time',      start: '2000-01-01',   end: today },
   ];
 }
 
@@ -128,13 +134,13 @@ export default function DateRangePicker({ value, onChange }) {
   const [draftStart, setDraftStart] = useState(null);
   const [draftEnd, setDraftEnd]     = useState(null);
   const [hoverDate, setHoverDate]   = useState(null);
-  const [isSelecting, setIsSelecting] = useState(false); // true = waiting for end date
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [closing, setClosing] = useState(false);
 
-  // Left calendar view; right is always left + 1
   const initView = () => {
     const end = value.end || toIso(new Date());
     const d = new Date(end + 'T12:00:00');
-    return shiftMonths(d.getFullYear(), d.getMonth(), -1); // right cal = end month
+    return shiftMonths(d.getFullYear(), d.getMonth(), -1);
   };
   const [[viewYear, viewMonth], setView] = useState(initView);
 
@@ -143,22 +149,35 @@ export default function DateRangePicker({ value, onChange }) {
   // Close on outside click
   useEffect(() => {
     const handler = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        closeDropdown();
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  });
+
+  const closeDropdown = () => {
+    if (!open || closing) return;
+    setClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+    }, 150);
+  };
 
   const handleToggle = () => {
-    if (!open) {
-      setDraftStart(null);
-      setDraftEnd(null);
-      setHoverDate(null);
-      setIsSelecting(false);
-      const [vy, vm] = initView();
-      setView([vy, vm]);
+    if (open) {
+      closeDropdown();
+      return;
     }
-    setOpen((o) => !o);
+    setDraftStart(null);
+    setDraftEnd(null);
+    setHoverDate(null);
+    setIsSelecting(false);
+    const [vy, vm] = initView();
+    setView([vy, vm]);
+    setOpen(true);
   };
 
   const handleDayClick = (date) => {
@@ -177,19 +196,18 @@ export default function DateRangePicker({ value, onChange }) {
   const handleApply = () => {
     if (draftStart && draftEnd) {
       onChange({ start: draftStart, end: draftEnd, label: 'Custom' });
-      setOpen(false);
+      closeDropdown();
     }
   };
 
   const handlePreset = (preset) => {
     onChange({ start: preset.start, end: preset.end, label: preset.label });
-    setOpen(false);
+    closeDropdown();
   };
 
   const [rightYear, rightMonth] = shiftMonths(viewYear, viewMonth, 1);
   const presets = buildPresets();
 
-  // What the calendars display as "selected"
   const calStart = draftStart ?? value.start;
   const calEnd   = draftEnd   ?? (isSelecting ? null : value.end);
 
@@ -203,12 +221,13 @@ export default function DateRangePicker({ value, onChange }) {
   return (
     <div className="drp-wrap" ref={wrapRef}>
       <button className={`drp-trigger${open ? ' drp-open' : ''}`} onClick={handleToggle}>
+        <span className="drp-trigger-icon">&#128197;</span>
         <span>{triggerLabel(value)}</span>
-        <span className="drp-arrow">▾</span>
+        <span className="drp-arrow">&#9662;</span>
       </button>
 
       {open && (
-        <div className="drp-dropdown">
+        <div className={`drp-dropdown${closing ? ' drp-closing' : ''}`}>
           <div className="drp-body">
             {/* Presets */}
             <div className="drp-presets">
@@ -226,8 +245,8 @@ export default function DateRangePicker({ value, onChange }) {
             {/* Calendars */}
             <div className="drp-cals-wrap">
               <div className="drp-cals-nav">
-                <button className="drp-nav-btn" onClick={() => setView(shiftMonths(viewYear, viewMonth, -1))}>‹</button>
-                <button className="drp-nav-btn" onClick={() => setView(shiftMonths(viewYear, viewMonth, 1))}>›</button>
+                <button className="drp-nav-btn" onClick={() => setView(shiftMonths(viewYear, viewMonth, -1))}>&#8249;</button>
+                <button className="drp-nav-btn" onClick={() => setView(shiftMonths(viewYear, viewMonth, 1))}>&#8250;</button>
               </div>
               <div className="drp-cals">
                 <CalendarMonth
