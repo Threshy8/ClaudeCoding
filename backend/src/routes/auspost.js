@@ -2,14 +2,39 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../db/supabase');
 const multer = require('multer');
+const XLSX = require('xlsx');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-// ── Helper: parse CSV text into rows ─────────────────────────────────────────
-function parseCsv(text) {
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function parseFileToRows(buffer, originalname) {
+  const ext = (originalname || '').toLowerCase();
+  if (ext.endsWith('.csv')) {
+    return parseCsvBuffer(buffer);
+  }
+  // Excel (.xlsx, .xls)
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  if (jsonRows.length === 0) return { headers: [], rows: [] };
+  // Normalise headers to uppercase
+  const headers = Object.keys(jsonRows[0]).map(h => h.toUpperCase().trim());
+  const rows = jsonRows.map(r => {
+    const out = {};
+    for (const [k, v] of Object.entries(r)) {
+      out[k.toUpperCase().trim()] = v;
+    }
+    return out;
+  });
+  return { headers, rows };
+}
+
+function parseCsvBuffer(buffer) {
+  const text = buffer.toString('utf-8');
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return { headers: [], rows: [] };
 
-  // Handle quoted CSV fields
   const splitRow = (line) => {
     const result = [];
     let current = '';
@@ -27,7 +52,7 @@ function parseCsv(text) {
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
     const vals = splitRow(lines[i]);
-    if (vals.length < 2) continue; // skip empty rows
+    if (vals.length < 2) continue;
     const row = {};
     headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
     rows.push(row);
@@ -35,7 +60,6 @@ function parseCsv(text) {
   return { headers, rows };
 }
 
-// Normalise column name lookups — AusPost CSVs have varying column names
 function findCol(headers, candidates) {
   for (const c of candidates) {
     const match = headers.find(h => h.includes(c));
@@ -46,36 +70,44 @@ function findCol(headers, candidates) {
 
 function parseDate(raw) {
   if (!raw) return null;
-  // YYYYMMDD format
-  if (/^\d{8}$/.test(raw)) {
-    return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+  const s = String(raw).trim();
+  // YYYYMMDD (number or string)
+  if (/^\d{8}$/.test(s)) {
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  }
+  // Excel serial date number (e.g. 46102)
+  if (/^\d{5}$/.test(s)) {
+    const d = new Date((parseInt(s) - 25569) * 86400 * 1000);
+    return d.toISOString().slice(0, 10);
   }
   // DD/MM/YYYY
-  const dmy = raw.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/);
+  const dmy = s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/);
   if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
   // ISO-ish
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
   return null;
 }
 
 function parseNum(raw) {
-  if (!raw || raw === '') return 0;
-  // Remove $ and whitespace
+  if (raw == null || raw === '') return null;
   const cleaned = String(raw).replace(/[$\s,]/g, '');
   const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : Math.round(n * 100) / 100;
+  return isNaN(n) ? null : Math.round(n * 100) / 100;
 }
 
-// ── POST /api/3pl/auspost — upload CSV ───────────────────────────────────────
+function isExpress(serviceType) {
+  return (serviceType || '').toLowerCase().includes('express');
+}
+
+// ── POST /api/3pl/auspost — upload CSV/Excel ─────────────────────────────────
 router.post('/', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   try {
-    const text = req.file.buffer.toString('utf-8');
-    const { headers, rows } = parseCsv(text);
+    const { headers, rows } = parseFileToRows(req.file.buffer, req.file.originalname);
 
     if (rows.length === 0) {
-      return res.status(400).json({ error: 'CSV has no data rows' });
+      return res.status(400).json({ error: 'File has no data rows' });
     }
 
     // Find columns by flexible matching
@@ -99,38 +131,58 @@ router.post('/', upload.single('file'), async (req, res) => {
     let skipped = 0;
 
     for (const row of rows) {
-      const consignmentId = row[colConsignment] || '';
-      const amount = parseNum(row[colAmount]);
-      const fsc = parseNum(row[colFsc]) + parseNum(row[colFscExp]);
+      const consignmentId = String(row[colConsignment] || '').trim();
+      const amount = parseNum(row[colAmount]) || 0;
+      const serviceType = row[colDesc] ? String(row[colDesc]).trim() : null;
 
-      // Compute total: use CSV total if present, else amount + fsc
-      let totalCost = colTotal ? parseNum(row[colTotal]) : amount + fsc;
-      if (totalCost === 0 && amount > 0) totalCost = amount + fsc;
+      // FSC: read from both FSC columns; if both are blank/zero, auto-calculate
+      let fscStd = colFsc ? parseNum(row[colFsc]) : null;
+      let fscExp = colFscExp ? parseNum(row[colFscExp]) : null;
+      let fsc;
+
+      if ((fscStd != null && fscStd > 0) || (fscExp != null && fscExp > 0)) {
+        // Use explicit values from the file
+        fsc = (fscStd || 0) + (fscExp || 0);
+      } else if (amount > 0) {
+        // Auto-calculate FSC based on service type
+        fsc = isExpress(serviceType)
+          ? Math.round(amount * 0.1105 * 100) / 100
+          : Math.round(amount * 0.067 * 100) / 100;
+      } else {
+        fsc = 0;
+      }
+
+      // Total: use CSV/Excel total if present and non-zero, else calculate
+      const fileTotal = colTotal ? parseNum(row[colTotal]) : null;
+      const totalCost = (fileTotal != null && fileTotal > 0)
+        ? fileTotal
+        : Math.round((amount + fsc) * 100) / 100;
 
       const lodgementDate = parseDate(row[colDate]);
+      const ref = colRef ? String(row[colRef] || '').trim() : '';
 
-      if (!consignmentId && !row[colRef]) {
+      if (!consignmentId && !ref) {
         skipped++;
         continue;
       }
 
       records.push({
-        consignment_id: consignmentId || `REF-${row[colRef]}`,
+        consignment_id: consignmentId || `REF-${ref}`,
         lodgement_date: lodgementDate || '1970-01-01',
-        shopify_ref: row[colRef] || null,
+        shopify_ref: ref || null,
         amount,
         fsc: Math.round(fsc * 100) / 100,
         total_cost: Math.round(totalCost * 100) / 100,
-        service_type: row[colDesc] || null,
-        to_state: row[colState] || null,
+        service_type: serviceType,
+        to_state: colState ? (String(row[colState] || '').trim() || null) : null,
       });
     }
 
     if (records.length === 0) {
-      return res.status(400).json({ error: 'No valid records found in CSV' });
+      return res.status(400).json({ error: 'No valid records found in file' });
     }
 
-    // Upsert by consignment_id
+    // Upsert by consignment_id (safe for re-uploads)
     const { data, error } = await supabase
       .from('auspost_freight_costs')
       .upsert(records, { onConflict: 'consignment_id' })
@@ -138,15 +190,18 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
+    const totalFreight = records.reduce((s, r) => s + r.total_cost, 0);
+
     res.json({
       success: true,
       imported: data.length,
       skipped,
       total_rows: rows.length,
+      total_freight: Math.round(totalFreight * 100) / 100,
     });
   } catch (err) {
-    console.error('AusPost CSV import error:', err.message);
-    res.status(500).json({ error: 'Failed to import CSV: ' + err.message });
+    console.error('AusPost import error:', err.message);
+    res.status(500).json({ error: 'Failed to import file: ' + err.message });
   }
 });
 
