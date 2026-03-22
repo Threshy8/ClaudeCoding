@@ -522,7 +522,7 @@ router.get('/entries/by-sku', async (req, res) => {
     // Get FIFO entries for the period
     const { data: entries, error: eErr } = await supabase
       .from('cogs_entries')
-      .select('sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, gross_profit, order_date')
+      .select('sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, line_revenue_cents, gross_profit, order_date')
       .gte('order_date', start_date)
       .lte('order_date', end_date)
       .eq('store', store);
@@ -533,6 +533,8 @@ router.get('/entries/by-sku', async (req, res) => {
     const toCents = (v) => Math.round(parseFloat(v || 0) * 100);
 
     // Group by SKU — accumulate revenue in integer cents
+    // Prefer line_revenue_cents (actual Shopify line total) over sale_price * qty
+    // to avoid rounding errors from discount allocation
     const skuMap = {};
     for (const e of entries) {
       if (!skuMap[e.sku]) {
@@ -540,7 +542,9 @@ router.get('/entries/by-sku', async (req, res) => {
       }
       const qty = e.quantity_sold || 0;
       skuMap[e.sku].units_sold += qty;
-      skuMap[e.sku].revenueCents += toCents(e.sale_price) * qty;
+      skuMap[e.sku].revenueCents += e.line_revenue_cents != null
+        ? e.line_revenue_cents
+        : toCents(e.sale_price) * qty;
       skuMap[e.sku].cogsCents += toCents(e.total_unit_cogs) * qty;
       skuMap[e.sku].purchaseCostCents += toCents(e.unit_purchase_cost) * qty;
       skuMap[e.sku].gdShippingCents += toCents(e.unit_gd_shipping) * qty;
@@ -694,7 +698,7 @@ router.get('/entries/by-order', async (req, res) => {
   try {
     const { data: entries, error: eErr } = await supabase
       .from('cogs_entries')
-      .select('shopify_order_id, order_number, order_date, sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, gross_profit, fulfillment_location')
+      .select('shopify_order_id, order_number, order_date, sku, product_name, quantity_sold, unit_purchase_cost, unit_gd_shipping, unit_scc_handling, total_unit_cogs, sale_price, line_revenue_cents, gross_profit, fulfillment_location')
       .gte('order_date', start_date)
       .lte('order_date', end_date)
       .eq('store', store)
@@ -716,6 +720,7 @@ router.get('/entries/by-order', async (req, res) => {
     const toCentsLocal = (v) => Math.round(parseFloat(v || 0) * 100);
 
     // Group by order (accumulate in cents)
+    // Prefer line_revenue_cents over sale_price * qty for revenue
     const orderMap = {};
     for (const e of entries) {
       const skuLower = (e.sku || '').toLowerCase();
@@ -735,7 +740,9 @@ router.get('/entries/by-order', async (req, res) => {
       }
       const o = orderMap[e.shopify_order_id];
       const qty = e.quantity_sold || 0;
-      const revCents = toCentsLocal(e.sale_price) * qty;
+      const revCents = e.line_revenue_cents != null
+        ? e.line_revenue_cents
+        : toCentsLocal(e.sale_price) * qty;
       const cogsCents = toCentsLocal(e.total_unit_cogs) * qty;
       o.line_items.push({
         sku: e.sku,

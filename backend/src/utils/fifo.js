@@ -27,7 +27,7 @@ async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
   // 1. Get all sales that don't yet have a cogs_entry
   const { data: sales, error: salesErr } = await supabase
     .from('shopify_sales')
-    .select('shopify_order_id, order_number, order_date, sku, product_name, quantity_sold, sale_price, fulfillment_location, store')
+    .select('shopify_order_id, order_number, order_date, sku, product_name, quantity_sold, sale_price, line_revenue, fulfillment_location, store')
     .eq('store', store);
 
   if (salesErr) throw new Error('Failed to fetch sales: ' + salesErr.message);
@@ -165,6 +165,11 @@ async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
     const salePrice = parseFloat(sale.sale_price || 0);
     const grossProfit = (salePrice - totalUnitCogs) * qty;
 
+    // Store actual Shopify line total in cents to avoid sale_price*qty rounding errors
+    const lineRevenueCents = sale.line_revenue != null
+      ? Math.round(parseFloat(sale.line_revenue) * 100)
+      : null;
+
     entriesToInsert.push({
       shopify_order_id:    sale.shopify_order_id,
       order_number:        sale.order_number,
@@ -179,6 +184,7 @@ async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
       unit_scc_handling:   Math.round(unitSccHandling * 10000) / 10000,
       total_unit_cogs:     Math.round(totalUnitCogs * 10000) / 10000,
       sale_price:          salePrice,
+      line_revenue_cents:  lineRevenueCents,
       gross_profit:        Math.round(grossProfit * 10000) / 10000,
       store:               sale.store || store,
       fulfillment_location: sale.fulfillment_location,
