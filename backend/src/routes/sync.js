@@ -44,7 +44,7 @@ async function getAccessToken(store, storeUrl, accessToken, clientId, clientSecr
 async function fetchAllOrders(storeUrl, accessToken) {
   const base = storeUrl.replace(/\/$/, '');
   const orders = [];
-  let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=paid,partially_refunded,refunded&limit=250&created_at_min=2025-01-01T00:00:00Z`;
+  let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=any&limit=250&created_at_min=2025-01-01T00:00:00Z`;
   console.log('[Shopify Sync] Fetching orders from:', url);
 
   while (url) {
