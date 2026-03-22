@@ -62,7 +62,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       skuCostMap[p.sku] = { totalQty: 0, totalCost: 0, productName: p.product_name };
     }
     skuCostMap[p.sku].totalQty += p.quantity;
-    skuCostMap[p.sku].totalCost += p.quantity * parseFloat(p.unit_cost);
+    skuCostMap[p.sku].totalCost += Math.round(p.quantity * parseFloat(p.unit_cost) * 100) / 100;
   }
 
   const avgCostMap = {};       // { sku: avgCost }
@@ -89,7 +89,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       periodRefundMap[r.sku] = { product_name: r.product_name, qty: 0, subtotal: 0 };
     }
     periodRefundMap[r.sku].qty += r.quantity_refunded;
-    periodRefundMap[r.sku].subtotal += parseFloat(r.refund_subtotal || 0);
+    periodRefundMap[r.sku].subtotal += Math.round(parseFloat(r.refund_subtotal || 0) * 100) / 100;
   }
 
   // --- Build period gross sales summary per SKU ---
@@ -99,9 +99,10 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       periodSkuMap[s.sku] = { product_name: s.product_name, gross_units: 0, gross_revenue: 0 };
     }
     periodSkuMap[s.sku].gross_units += s.quantity_sold;
-    periodSkuMap[s.sku].gross_revenue += s.line_revenue != null
+    const lineRev = s.line_revenue != null
       ? parseFloat(s.line_revenue)
       : s.quantity_sold * parseFloat(s.sale_price);
+    periodSkuMap[s.sku].gross_revenue += Math.round(lineRev * 100) / 100;
   }
 
   // Merge period refunds into periodSkuMap so cross-period returns create entries too
@@ -176,7 +177,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   function _sumVirtual(rows, sku) {
     return (rows || []).filter(r => r.sku === sku)
-      .reduce((s, r) => s + (r.quantity_sold || 0) * parseFloat(r.sale_price || 0), 0);
+      .reduce((s, r) => s + Math.round((r.quantity_sold || 0) * parseFloat(r.sale_price || 0) * 100) / 100, 0);
   }
   const redoFees = _sumVirtual(virtualRows, 'x-redo');
   const redoUnits = (virtualRows || []).filter(r => r.sku === 'x-redo')
