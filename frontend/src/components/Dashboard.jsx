@@ -143,6 +143,8 @@ export default function Dashboard({ dateRange }) {
 
     const fifoPromise = apiFetch(`/api/cogs/entries/by-sku?${params}`)
       .then(data => {
+        // If backend signals partial FIFO coverage, fall back to summary
+        if (data?.partial) return apiFetch(`/api/cogs/summary?${params}`);
         const breakdown = data?.sku_breakdown || [];
         const hasCostData = breakdown.some(r => (r.cogs || 0) > 0);
         if (breakdown.length > 0 && hasCostData) {

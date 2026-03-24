@@ -562,6 +562,19 @@ router.get('/entries/by-sku', async (req, res) => {
     if (eErr) return res.status(500).json({ error: eErr.message });
     if (!entries || entries.length === 0) return res.json({ sku_breakdown: [], total_revenue: 0, total_cogs: 0, gross_margin_pct: 0, total_inventory_value: 0, redo_fees: 0, shipping_total: 0, tax_total: 0, gross_sales: 0, total_discounts: 0, total_returns: 0, net_sales: 0, shipping_revenue: 0, total_collected: 0 });
 
+    // Check for partial coverage: compare cogs_entries count vs shopify_sales count
+    const { count: salesCount } = await supabase
+      .from('shopify_sales')
+      .select('*', { count: 'exact', head: true })
+      .gte('order_date', start_date)
+      .lte('order_date', end_date)
+      .eq('store', store)
+      .not('sku', 'in', '(shipping,x-redo,tax)');
+    if (salesCount && entries.length < salesCount) {
+      // Partial FIFO coverage — signal caller to fall back to /summary
+      return res.json({ partial: true, sku_breakdown: [] });
+    }
+
     // Group by SKU — accumulate revenue in integer cents
     // Prefer line_revenue_cents (actual Shopify line total) over sale_price * qty
     // to avoid rounding errors from discount allocation
