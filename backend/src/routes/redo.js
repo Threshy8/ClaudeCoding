@@ -142,6 +142,19 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // Aggregate items with the same (redo_return_id, sku) to avoid upsert conflicts
+    const aggMap = {};
+    for (const r of records) {
+      const key = `${r.redo_return_id}|${r.sku}`;
+      if (!aggMap[key]) {
+        aggMap[key] = { ...r };
+      } else {
+        aggMap[key].quantity_returned += r.quantity_returned;
+        aggMap[key].refund_amount = Math.round((aggMap[key].refund_amount + r.refund_amount) * 100) / 100;
+      }
+    }
+    const aggregatedRecords = Object.values(aggMap);
+
     // De-duplicate: skip returns already captured in shopify_refunds
     const { data: existingRefunds } = await supabase
       .from('shopify_refunds')
@@ -152,7 +165,7 @@ router.post('/', async (req, res) => {
       (existingRefunds || []).map(r => `${r.order_number}|${r.sku}`)
     );
 
-    const filteredRecords = records.filter(r => {
+    const filteredRecords = aggregatedRecords.filter(r => {
       const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
       return !coveredSet.has(`${orderNum}|${r.sku}`);
     });
@@ -180,7 +193,8 @@ router.post('/', async (req, res) => {
       success: true,
       returns_fetched: allReturns.length,
       records_total: records.length,
-      records_deduped: records.length - filteredRecords.length,
+      records_aggregated: aggregatedRecords.length,
+      records_deduped: aggregatedRecords.length - filteredRecords.length,
       records_attempted: filteredRecords.length,
       records_inserted: insertedCount,
       errors: errors.length > 0 ? errors : undefined,
