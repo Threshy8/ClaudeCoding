@@ -160,12 +160,20 @@ router.post('/', async (req, res) => {
     // Clear old Redo returns and insert fresh
     await supabase.from('redo_returns').delete().eq('store', store);
 
+    let insertedCount = 0;
+    const errors = [];
     for (let i = 0; i < filteredRecords.length; i += 100) {
       const batch = filteredRecords.slice(i, i + 100);
-      const { error: upsertErr } = await supabase
+      const { data: inserted, error: upsertErr } = await supabase
         .from('redo_returns')
-        .upsert(batch, { onConflict: 'redo_return_id,sku' });
-      if (upsertErr) console.error('Redo upsert error:', upsertErr.message);
+        .upsert(batch, { onConflict: 'redo_return_id,sku' })
+        .select('id');
+      if (upsertErr) {
+        console.error('Redo upsert error:', upsertErr.message, 'batch index:', i);
+        errors.push({ batch_index: i, batch_size: batch.length, error: upsertErr.message, sample: batch[0] });
+      } else {
+        insertedCount += (inserted || []).length;
+      }
     }
 
     res.json({
@@ -173,7 +181,9 @@ router.post('/', async (req, res) => {
       returns_fetched: allReturns.length,
       records_total: records.length,
       records_deduped: records.length - filteredRecords.length,
-      records_synced: filteredRecords.length,
+      records_attempted: filteredRecords.length,
+      records_inserted: insertedCount,
+      errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
     console.error('Redo sync error:', err.message);
