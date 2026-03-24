@@ -68,10 +68,11 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   if (allRefundsError) throw new Error(allRefundsError.message);
 
-  // 3b. Get all Redo returns (all time) for inventory on-hand
+  // 3b. Get all Redo returns (all time) for inventory on-hand — only completed
   const { data: allRedoReturns } = await supabase
     .from('redo_returns')
-    .select('sku, quantity_returned, shopify_order_name');
+    .select('sku, quantity_returned, shopify_order_name')
+    .eq('status', 'complete');
 
   // 4. Get gross sales for the period (by order_date)
   const { data: periodSales, error: periodSalesError } = await supabase
@@ -94,12 +95,13 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   if (periodRefundsError) throw new Error(periodRefundsError.message);
 
-  // 5b. Get Redo returns processed in the period (by return_date)
+  // 5b. Get Redo returns processed in the period (by return_date) — only completed
   const { data: periodRedoReturns } = await supabase
     .from('redo_returns')
     .select('sku, product_name, quantity_returned, refund_amount, shopify_order_name, return_date')
     .gte('return_date', periodStart)
-    .lt('return_date', periodEnd);
+    .lt('return_date', periodEnd)
+    .eq('status', 'complete');
 
   // --- Build average cost map per SKU ---
   // totalCostCents accumulates in integer cents to avoid float drift
@@ -641,7 +643,7 @@ router.get('/entries/by-sku', async (req, res) => {
     const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
     const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold, order_number').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded');
-    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name');
+    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name').eq('status', 'complete');
 
     const salesOrderSkuSet = new Set();
     for (const s of (allSales || [])) {
@@ -685,13 +687,14 @@ router.get('/entries/by-sku', async (req, res) => {
       });
     }
 
-    // Merge Redo returns into refund map — only where a matching sale exists
+    // Merge Redo returns into refund map — only completed, where a matching sale exists
     const { data: periodRedoReturns } = await supabase
       .from('redo_returns')
       .select('sku, quantity_returned, refund_amount, shopify_order_name, return_date')
       .gte('return_date', start_date)
       .lte('return_date', end_date)
-      .eq('store', store);
+      .eq('store', store)
+      .eq('status', 'complete');
 
     for (const r of (periodRedoReturns || [])) {
       const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
