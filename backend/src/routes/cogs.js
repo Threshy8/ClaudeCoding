@@ -54,9 +54,10 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   if (purchaseError) throw new Error(purchaseError.message);
 
   // 2. Get gross sales (all time) — used with all-time refunds for inventory on-hand
+  //    Also fetch order_number so we can validate Redo returns against actual sales
   const { data: allSales, error: allSalesError } = await supabase
     .from('shopify_sales')
-    .select('sku, quantity_sold')
+    .select('sku, quantity_sold, order_number')
     .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
   if (allSalesError) throw new Error(allSalesError.message);
@@ -71,7 +72,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   // 3b. Get all Redo returns (all time) for inventory on-hand
   const { data: allRedoReturns } = await supabase
     .from('redo_returns')
-    .select('sku, quantity_returned');
+    .select('sku, quantity_returned, shopify_order_name');
 
   // 4. Get gross sales for the period (by order_date)
   const { data: periodSales, error: periodSalesError } = await supabase
@@ -119,6 +120,12 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     totalPurchasedMap[sku] = d.totalQty;
   }
 
+  // --- Build set of (order_number, sku) pairs that exist in shopify_sales ---
+  const salesOrderSkuSet = new Set();
+  for (const s of allSales) {
+    if (s.order_number) salesOrderSkuSet.add(`${s.order_number}|${s.sku}`);
+  }
+
   // --- Build all-time net units sold map per SKU (gross sales − all-time refunds) ---
   const allTimeSoldMap = {}; // { sku: netSold }
   for (const s of allSales) {
@@ -128,7 +135,10 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_refunded;
   }
   for (const r of (allRedoReturns || [])) {
-    allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_returned;
+    const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
+    if (salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) {
+      allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_returned;
+    }
   }
 
   // --- Build period refund map (by refund_date) ---
@@ -147,8 +157,10 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       refund_amount: parseFloat(r.refund_subtotal || 0),
     });
   }
-  // Merge Redo returns into period refund map
+  // Merge Redo returns into period refund map — only if a matching sale exists
   for (const r of (periodRedoReturns || [])) {
+    const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
+    if (!salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
     const sku = r.sku;
     if (!periodRefundMap[sku]) {
       periodRefundMap[sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0, details: [] };
@@ -156,7 +168,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     periodRefundMap[sku].qty += r.quantity_returned;
     periodRefundMap[sku].subtotalCents += toCents(r.refund_amount);
     periodRefundMap[sku].details.push({
-      order_number: (r.shopify_order_name || '').replace(/^#/, ''),
+      order_number: orderNum,
       refund_date: r.return_date,
       quantity: r.quantity_returned,
       refund_amount: parseFloat(r.refund_amount || 0),
@@ -627,9 +639,15 @@ router.get('/entries/by-sku', async (req, res) => {
 
     // Get inventory on-hand from WAC data (purchases − all-time net sold)
     const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
-    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
+    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold, order_number').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded');
-    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned');
+    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name');
+
+    // Build set of (order_number, sku) pairs for validating Redo returns
+    const salesOrderSkuSet = new Set();
+    for (const s of (allSales || [])) {
+      if (s.order_number) salesOrderSkuSet.add(`${s.order_number}|${s.sku}`);
+    }
 
     const purchaseMap = {};
     for (const p of (allPurchases || [])) {
@@ -640,7 +658,12 @@ router.get('/entries/by-sku', async (req, res) => {
     const allTimeSold = {};
     for (const s of (allSales || [])) allTimeSold[s.sku] = (allTimeSold[s.sku] || 0) + s.quantity_sold;
     for (const r of (allRefunds || [])) allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_refunded;
-    for (const r of (allRedoReturns || [])) allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_returned;
+    for (const r of (allRedoReturns || [])) {
+      const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
+      if (salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) {
+        allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_returned;
+      }
+    }
 
     // Get period refunds (by refund_date) to compute net units/revenue
     const { data: periodRefunds } = await supabase
@@ -663,7 +686,7 @@ router.get('/entries/by-sku', async (req, res) => {
       });
     }
 
-    // Merge Redo returns into refund map
+    // Merge Redo returns into refund map — only if a matching sale exists
     const { data: periodRedoReturns } = await supabase
       .from('redo_returns')
       .select('sku, quantity_returned, refund_amount, shopify_order_name, return_date')
@@ -672,11 +695,13 @@ router.get('/entries/by-sku', async (req, res) => {
       .eq('store', store);
 
     for (const r of (periodRedoReturns || [])) {
+      const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
+      if (!salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
       if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotalCents: 0, details: [] };
       refundMap[r.sku].qty += r.quantity_returned;
       refundMap[r.sku].subtotalCents += toCents(r.refund_amount);
       refundMap[r.sku].details.push({
-        order_number: (r.shopify_order_name || '').replace(/^#/, ''),
+        order_number: orderNum,
         refund_date: r.return_date,
         quantity: r.quantity_returned,
         refund_amount: parseFloat(r.refund_amount || 0),
