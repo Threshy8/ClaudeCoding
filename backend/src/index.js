@@ -17,6 +17,7 @@ const cogsRouter = require('./routes/cogs');
 const journalRouter = require('./routes/journal');
 const fulfillmentRouter = require('./routes/fulfillment');
 const auspostRouter = require('./routes/auspost');
+const redoRouter = require('./routes/redo');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -38,6 +39,7 @@ app.use('/api', cogsRouter); // also mounts /api/inventory/summary from cogsRout
 app.use('/api/journal', journalRouter);
 app.use('/api/fulfillment', fulfillmentRouter);
 app.use('/api/3pl/auspost', auspostRouter);
+app.use('/api/sync/redo', redoRouter);
 
 // Root health check (Railway checks GET /)
 app.get('/', (req, res) => res.json({ status: 'ok' }));

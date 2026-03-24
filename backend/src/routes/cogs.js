@@ -68,6 +68,11 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   if (allRefundsError) throw new Error(allRefundsError.message);
 
+  // 3b. Get all Redo returns (all time) for inventory on-hand
+  const { data: allRedoReturns } = await supabase
+    .from('redo_returns')
+    .select('sku, quantity_returned');
+
   // 4. Get gross sales for the period (by order_date)
   const { data: periodSales, error: periodSalesError } = await supabase
     .from('shopify_sales')
@@ -88,6 +93,13 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .lt('refund_date', periodEnd);
 
   if (periodRefundsError) throw new Error(periodRefundsError.message);
+
+  // 5b. Get Redo returns processed in the period (by return_date)
+  const { data: periodRedoReturns } = await supabase
+    .from('redo_returns')
+    .select('sku, product_name, quantity_returned, refund_amount, shopify_order_name, return_date')
+    .gte('return_date', periodStart)
+    .lt('return_date', periodEnd);
 
   // --- Build average cost map per SKU ---
   // totalCostCents accumulates in integer cents to avoid float drift
@@ -115,6 +127,9 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   for (const r of allRefunds) {
     allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_refunded;
   }
+  for (const r of (allRedoReturns || [])) {
+    allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_returned;
+  }
 
   // --- Build period refund map (by refund_date) ---
   // subtotalCents accumulates in integer cents
@@ -130,6 +145,22 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       refund_date: r.refund_date,
       quantity: r.quantity_refunded,
       refund_amount: parseFloat(r.refund_subtotal || 0),
+    });
+  }
+  // Merge Redo returns into period refund map
+  for (const r of (periodRedoReturns || [])) {
+    const sku = r.sku;
+    if (!periodRefundMap[sku]) {
+      periodRefundMap[sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0, details: [] };
+    }
+    periodRefundMap[sku].qty += r.quantity_returned;
+    periodRefundMap[sku].subtotalCents += toCents(r.refund_amount);
+    periodRefundMap[sku].details.push({
+      order_number: (r.shopify_order_name || '').replace(/^#/, ''),
+      refund_date: r.return_date,
+      quantity: r.quantity_returned,
+      refund_amount: parseFloat(r.refund_amount || 0),
+      source: 'redo',
     });
   }
 
@@ -598,6 +629,7 @@ router.get('/entries/by-sku', async (req, res) => {
     const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
     const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded');
+    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned');
 
     const purchaseMap = {};
     for (const p of (allPurchases || [])) {
@@ -608,6 +640,7 @@ router.get('/entries/by-sku', async (req, res) => {
     const allTimeSold = {};
     for (const s of (allSales || [])) allTimeSold[s.sku] = (allTimeSold[s.sku] || 0) + s.quantity_sold;
     for (const r of (allRefunds || [])) allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_refunded;
+    for (const r of (allRedoReturns || [])) allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_returned;
 
     // Get period refunds (by refund_date) to compute net units/revenue
     const { data: periodRefunds } = await supabase
@@ -627,6 +660,27 @@ router.get('/entries/by-sku', async (req, res) => {
         refund_date: r.refund_date,
         quantity: r.quantity_refunded,
         refund_amount: parseFloat(r.refund_subtotal || 0),
+      });
+    }
+
+    // Merge Redo returns into refund map
+    const { data: periodRedoReturns } = await supabase
+      .from('redo_returns')
+      .select('sku, quantity_returned, refund_amount, shopify_order_name, return_date')
+      .gte('return_date', start_date)
+      .lte('return_date', end_date)
+      .eq('store', store);
+
+    for (const r of (periodRedoReturns || [])) {
+      if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotalCents: 0, details: [] };
+      refundMap[r.sku].qty += r.quantity_returned;
+      refundMap[r.sku].subtotalCents += toCents(r.refund_amount);
+      refundMap[r.sku].details.push({
+        order_number: (r.shopify_order_name || '').replace(/^#/, ''),
+        refund_date: r.return_date,
+        quantity: r.quantity_returned,
+        refund_amount: parseFloat(r.refund_amount || 0),
+        source: 'redo',
       });
     }
 

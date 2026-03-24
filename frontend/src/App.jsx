@@ -9,7 +9,7 @@ import InventoryTab from './components/InventoryTab';
 import ForecastTab from './components/ForecastTab';
 import DateRangePicker from './components/DateRangePicker';
 import { DemoModeContext } from './contexts/DemoModeContext';
-import { syncShopify } from './api';
+import { syncShopify, syncRedo } from './api';
 import './App.css';
 
 const TABS = ['Dashboard', 'Inventory', 'Forecast', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Refunds', 'Journal Export'];
@@ -106,7 +106,9 @@ export default function App() {
     setSyncError(null);
     try {
       const result = await syncShopify('au');
-      setSyncResult(result);
+      // Redo sync runs after Shopify so de-duplication works correctly
+      const redoResult = await syncRedo('au').catch(() => ({ records_synced: 0 }));
+      setSyncResult({ ...result, redo_returns_synced: redoResult.records_synced || 0 });
     } catch (err) {
       setSyncError(err.message);
     } finally {
@@ -170,7 +172,8 @@ export default function App() {
           ) : (
             <span>
               Sync complete — {syncResult.orders_fetched ?? syncResult.orders_processed ?? 0} orders fetched,{' '}
-              {syncResult.line_items_synced} line items synced.
+              {syncResult.line_items_synced} line items synced
+              {syncResult.redo_returns_synced > 0 ? `, ${syncResult.redo_returns_synced} Redo returns synced` : ''}.
             </span>
           )}
           <button className="banner-close" onClick={() => { setSyncResult(null); setSyncError(null); }}>✕</button>

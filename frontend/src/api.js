@@ -45,6 +45,10 @@ export const getCogsSummary = ({ start, end }) => {
 export const syncShopify = (store = 'au') =>
   request('/api/sync/shopify', { method: 'POST', body: JSON.stringify({ store }) });
 
+// Redo returns sync
+export const syncRedo = (store = 'au') =>
+  request('/api/sync/redo', { method: 'POST', body: JSON.stringify({ store }) });
+
 // Journal export — returns CSV text
 export const exportJournal = (period) =>
   request(`/api/journal/export?period=${period}&format=csv`);
