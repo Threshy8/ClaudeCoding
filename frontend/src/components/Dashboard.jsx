@@ -228,8 +228,8 @@ export default function Dashboard({ dateRange }) {
     <div>
       <div className="kpi-grid">
         <div className="kpi-card">
-          <div className="kpi-label">Net Sales</div>
-          <div className="kpi-value">{mc(_fmt(netSales))}</div>
+          <div className="kpi-label">REVENUE</div>
+          <div className="kpi-value">{mc(_fmt(totalCollected))}</div>
           <div className="kpi-sub">{rangeLabel}</div>
         </div>
         <div className="kpi-card">
