@@ -53,6 +53,55 @@ router.get('/test', async (req, res) => {
   }
 });
 
+// GET /api/sync/redo/debug — inspect raw API response headers + first/last records
+router.get('/debug', async (req, res) => {
+  if (!TOKEN || !STORE_ID) {
+    return res.json({ ok: false, error: 'REDO_API_TOKEN or REDO_STORE_ID not configured' });
+  }
+  try {
+    const pageSize = req.query.page_size || '5';
+    const params = {};
+    if (req.query.updated_at_min) params.updated_at_min = req.query.updated_at_min;
+    if (req.query.updated_at_max) params.updated_at_max = req.query.updated_at_max;
+
+    const headers = {
+      'Authorization': `Bearer ${TOKEN}`,
+      'X-Page-Size': pageSize,
+    };
+    if (req.query.page_continue) headers['X-Page-Continue'] = req.query.page_continue;
+
+    const response = await axios.get(`${BASE_URL}/stores/${STORE_ID}/returns`, { headers, params });
+    const returns = response.data.returns || response.data || [];
+
+    res.json({
+      response_headers: response.headers,
+      returns_count: returns.length,
+      first_return: returns[0] ? {
+        id: returns[0].id || returns[0]._id,
+        status: returns[0].status,
+        type: returns[0].type,
+        createdAt: returns[0].createdAt,
+        updatedAt: returns[0].updatedAt,
+        order_name: returns[0].order?.name,
+        items_count: (returns[0].items || []).length,
+        items: (returns[0].items || []).map(i => ({ sku: i.sku, quantity: i.quantity, refund: i.refund })),
+      } : null,
+      last_return: returns.length > 1 ? {
+        id: returns[returns.length - 1].id || returns[returns.length - 1]._id,
+        status: returns[returns.length - 1].status,
+        type: returns[returns.length - 1].type,
+        createdAt: returns[returns.length - 1].createdAt,
+        updatedAt: returns[returns.length - 1].updatedAt,
+        order_name: returns[returns.length - 1].order?.name,
+        items_count: (returns[returns.length - 1].items || []).length,
+      } : null,
+      data_keys: returns[0] ? Object.keys(returns[0]) : [],
+    });
+  } catch (err) {
+    res.json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
 // POST /api/sync/redo — full sync
 router.post('/', async (req, res) => {
   const store = req.body.store || 'au';
