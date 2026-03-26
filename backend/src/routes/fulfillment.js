@@ -268,8 +268,17 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
     });
 
     const raw   = message.content[0].text.trim();
+    console.log('[parse-pdf] Claude raw response:', raw);
+    console.log('[parse-pdf] stop_reason:', message.stop_reason, '| usage:', JSON.stringify(message.usage));
     const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-    let parsed = JSON.parse(clean);
+    let parsed;
+    try {
+      parsed = JSON.parse(clean);
+    } catch (jsonErr) {
+      console.error('[parse-pdf] JSON parse failed. Cleaned text:', clean.slice(0, 500));
+      return res.status(422).json({ error: 'Claude response was not valid JSON', raw: clean.slice(0, 1000) });
+    }
+    console.log('[parse-pdf] Parsed keys:', Object.keys(parsed), '| line_items?', Array.isArray(parsed.line_items), '| invoices?', Array.isArray(parsed.invoices));
 
     // Multi-invoice PDFs (Statement of Account) may return { invoices: [...] }
     // instead of a single { line_items: [...] }. Merge into one flat structure.
