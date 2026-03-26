@@ -451,10 +451,10 @@ function InvoicesView({ dateRange }) {
                         </td>
                         <td className="text-right">{mn(inv.units_shipped ?? '—')}</td>
                         <td className="text-right" style={{ color: COST_TYPE_COLOR.fixed }}>
-                          <InvoiceCostTypTotal invoiceId={inv.id} lineItems={lineItems} costType="fixed" />
+                          {inv.fixed_total > 0 ? mc(_fmt(inv.fixed_total)) : '—'}
                         </td>
                         <td className="text-right" style={{ color: COST_TYPE_COLOR.variable }}>
-                          <InvoiceCostTypTotal invoiceId={inv.id} lineItems={lineItems} costType="variable" />
+                          {inv.variable_total > 0 ? mc(_fmt(inv.variable_total)) : '—'}
                         </td>
                         <td className="text-right" style={{ fontWeight: 600 }}>{mc(_fmt(inv.total_ex_gst))}</td>
                         <td className="text-right text-muted">{mc(_fmt(inv.total_inc_gst))}</td>
@@ -924,14 +924,6 @@ function EditableSelect({ value, onChange, options, color }) {
       {options.map(([val, label]) => <option key={val} value={val}>{label}</option>)}
     </select>
   );
-}
-
-function InvoiceCostTypTotal({ invoiceId, lineItems, costType }) {
-  const { mc } = useDemoMask();
-  const items = lineItems[invoiceId];
-  if (!items) return <span className="text-muted" style={{ fontSize: 12 }}>—</span>;
-  const total = items.filter(li => li.cost_type === costType).reduce((s, li) => s + parseFloat(li.amount_ex_gst || 0), 0);
-  return <span>{total > 0 ? mc(_fmt(total)) : '—'}</span>;
 }
 
 function LineItemsTable({ items }) {

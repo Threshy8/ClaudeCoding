@@ -57,6 +57,8 @@ router.get('/summary', async (req, res) => {
 
   const totals = { inbound: 0, outbound: 0, delivery: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0 };
 
+  // Per-invoice fixed/variable breakdown
+  const perInvoice = {};
   for (const li of (lineItems || [])) {
     const amt = parseFloat(li.amount_ex_gst) || 0;
     totals.total += amt;
@@ -65,9 +67,19 @@ router.get('/summary', async (req, res) => {
     else                                  totals.other    += amt;
     if (li.cost_type === 'fixed')        totals.fixed    += amt;
     else                                  totals.variable += amt;
+
+    if (!perInvoice[li.invoice_id]) perInvoice[li.invoice_id] = { fixed: 0, variable: 0 };
+    if (li.cost_type === 'fixed') perInvoice[li.invoice_id].fixed += amt;
+    else                          perInvoice[li.invoice_id].variable += amt;
   }
 
-  for (const inv of invoices) totals.units_shipped += parseInt(inv.units_shipped) || 0;
+  // Enrich each invoice with fixed/variable totals
+  for (const inv of invoices) {
+    const pi = perInvoice[inv.id] || { fixed: 0, variable: 0 };
+    inv.fixed_total    = Math.round(pi.fixed * 100) / 100;
+    inv.variable_total = Math.round(pi.variable * 100) / 100;
+    totals.units_shipped += parseInt(inv.units_shipped) || 0;
+  }
 
   totals.cost_per_unit = totals.units_shipped > 0
     ? Math.round((totals.variable / totals.units_shipped) * 100) / 100
