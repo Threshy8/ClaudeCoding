@@ -193,6 +193,11 @@ router.get('/order-cost-sheet', async (req, res) => {
 
 // ── POST /api/fulfillment/parse-pdf ───────────────────────────────────────────
 router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
+  // Multi-page PDFs (e.g. 6-page Statement of Account) can take 60-90s to parse.
+  // Railway's default request timeout is 100s — extend to 120s to avoid "Failed to fetch".
+  req.setTimeout(120_000);
+  res.setTimeout(120_000);
+
   if (!req.file) return res.status(400).json({ error: 'No PDF uploaded' });
 
   const base64 = req.file.buffer.toString('base64');
@@ -252,7 +257,7 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
   try {
     const message = await anthropic.messages.create({
       model: 'claude-opus-4-5',
-      max_tokens: 2000,
+      max_tokens: 4000,
       messages: [{
         role: 'user',
         content: [
@@ -260,6 +265,7 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
           { type: 'text', text: prompt },
         ],
       }],
+      timeout: 120_000, // 120s — multi-page PDFs need more time
     });
 
     const raw   = message.content[0].text.trim();
