@@ -156,16 +156,28 @@ function InvoicesView({ dateRange }) {
 
   const handleSaveAll = async () => {
     setSaving(true); setUploadError(null);
+    console.log('[SaveAll] Starting. Invoice count:', parsed.invoices.length);
+    console.log('[SaveAll] Invoice refs:', parsed.invoices.map((inv, i) => `[${i}] ref=${inv.invoice_ref} date=${inv.invoice_date} lines=${inv.line_items?.length}`));
     try {
-      for (const inv of parsed.invoices) {
-        await apiFetch('/api/fulfillment/invoices', {
-          method: 'POST',
-          body: JSON.stringify(inv),
-        });
+      for (let i = 0; i < parsed.invoices.length; i++) {
+        const inv = parsed.invoices[i];
+        console.log(`[SaveAll] Saving invoice ${i}/${parsed.invoices.length}: ref=${inv.invoice_ref}, date=${inv.invoice_date}, line_items=${inv.line_items?.length}, due_date=${inv.due_date}`);
+        console.log(`[SaveAll] Invoice ${i} full payload:`, JSON.stringify(inv).slice(0, 500));
+        try {
+          await apiFetch('/api/fulfillment/invoices', {
+            method: 'POST',
+            body: JSON.stringify(inv),
+          });
+          console.log(`[SaveAll] Invoice ${i} (${inv.invoice_ref}) saved OK`);
+        } catch (innerErr) {
+          console.error(`[SaveAll] Invoice ${i} (${inv.invoice_ref}) FAILED:`, innerErr.message);
+          throw innerErr;
+        }
       }
+      console.log('[SaveAll] All done, clearing state');
       setParsed(null); setInvoiceSummary(null); setActiveTab(0);
       load();
-    } catch (e) { setUploadError(e.message); }
+    } catch (e) { console.error('[SaveAll] Aborted with error:', e.message); setUploadError(e.message); }
     finally { setSaving(false); }
   };
 
