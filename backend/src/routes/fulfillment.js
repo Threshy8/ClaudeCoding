@@ -280,8 +280,13 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
     }
     console.log('[parse-pdf] Parsed keys:', Object.keys(parsed), '| line_items?', Array.isArray(parsed.line_items), '| invoices?', Array.isArray(parsed.invoices));
 
-    // Multi-invoice PDFs (Statement of Account) may return { invoices: [...] }
-    // instead of a single { line_items: [...] }. Merge into one flat structure.
+    // Multi-invoice PDFs (Statement of Account) — Claude may return:
+    //   1. A top-level array: [ {invoice}, {invoice}, ... ]
+    //   2. An object with invoices key: { invoices: [...] }
+    // Normalize both into { invoices: [...] } before merging.
+    if (Array.isArray(parsed)) {
+      parsed = { invoices: parsed };
+    }
     if (!parsed.line_items && Array.isArray(parsed.invoices)) {
       const invoices = parsed.invoices;
       const merged = {
