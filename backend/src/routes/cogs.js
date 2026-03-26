@@ -911,19 +911,37 @@ router.get('/entries/by-order', async (req, res) => {
 // ── GET /api/inventory/debug ─────────────────────────────────────────────────
 // Lightweight diagnostic: tests each query the summary endpoint uses
 router.get('/inventory/debug', async (req, res) => {
+  const store = req.query.store || 'au';
   const results = {};
   try {
-    const { data: d1, error: e1 } = await supabase.from('purchase_order_lines').select('sku', { count: 'exact', head: true });
-    results.purchase_order_lines = e1 ? `ERROR: ${e1.message}` : 'ok';
+    const { count: c1, error: e1 } = await supabase.from('purchase_order_lines').select('*', { count: 'exact', head: true }).gt('quantity_remaining', 0);
+    results.purchase_order_lines = e1 ? `ERROR: ${e1.message}` : `ok (${c1} rows)`;
   } catch (e) { results.purchase_order_lines = `CRASH: ${e.message}`; }
   try {
-    const { data: d2, error: e2 } = await supabase.from('stock_adjustments').select('sku', { count: 'exact', head: true });
-    results.stock_adjustments = e2 ? `ERROR: ${e2.message}` : 'ok';
+    const { count: c2, error: e2 } = await supabase.from('stock_adjustments').select('*', { count: 'exact', head: true });
+    results.stock_adjustments = e2 ? `ERROR: ${e2.message}` : `ok (${c2} rows)`;
   } catch (e) { results.stock_adjustments = `CRASH: ${e.message}`; }
   try {
-    const { data: d3, error: e3 } = await supabase.from('shopify_sales').select('sku', { count: 'exact', head: true });
-    results.shopify_sales = e3 ? `ERROR: ${e3.message}` : 'ok';
-  } catch (e) { results.shopify_sales = `CRASH: ${e.message}`; }
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const { count: c3, error: e3 } = await supabase.from('shopify_sales').select('*', { count: 'exact', head: true }).gte('order_date', monthStart).eq('store', store);
+    results.shopify_sales_month = e3 ? `ERROR: ${e3.message}` : `ok (${c3} rows)`;
+  } catch (e) { results.shopify_sales_month = `CRASH: ${e.message}`; }
+  try {
+    const thirtyAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString().slice(0, 10);
+    const { count: c4, error: e4 } = await supabase.from('shopify_sales').select('*', { count: 'exact', head: true }).gte('order_date', thirtyAgo).eq('store', store);
+    results.shopify_sales_30d = e4 ? `ERROR: ${e4.message}` : `ok (${c4} rows)`;
+  } catch (e) { results.shopify_sales_30d = `CRASH: ${e.message}`; }
+
+  // Now try the actual summary query step by step
+  try {
+    const { data: lots, error: lotsErr } = await supabase
+      .from('purchase_order_lines')
+      .select('sku, product_name, unit_cost, quantity_remaining, po_number, location')
+      .gt('quantity_remaining', 0);
+    results.lots_fetch = lotsErr ? `ERROR: ${lotsErr.message}` : `ok (${lots?.length} rows)`;
+  } catch (e) { results.lots_fetch = `CRASH: ${e.message}`; }
+
   res.json(results);
 });
 
