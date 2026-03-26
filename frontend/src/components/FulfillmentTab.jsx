@@ -219,7 +219,7 @@ function InvoicesView({ dateRange }) {
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
           {[
-            { label: 'Total 3PL Cost', value: mc(_fmt(summary.total)), sub: `Ex GST · ${dateRange?.label || 'Period'}`, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
+            { label: 'Total 3PL Cost', value: mc(_fmt(summary.total)), sub: `${mc(_fmt(Math.round(summary.total * 110) / 100))} inc GST · ${dateRange?.label || 'Period'}`, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
             { label: 'Fixed Costs', value: mc(_fmt(summary.fixed)), sub: 'Storage, receiving, labour', color: COST_TYPE_COLOR.fixed, bg: `${COST_TYPE_COLOR.fixed}0f` },
             { label: 'Variable Costs', value: mc(_fmt(summary.variable)), sub: 'Pick/pack, dispatch per order', color: COST_TYPE_COLOR.variable, bg: `${COST_TYPE_COLOR.variable}0f` },
             { label: 'Variable / Unit', value: summary.cost_per_unit > 0 ? mc(_fmt(summary.cost_per_unit)) : '—', sub: summary.units_shipped > 0 ? `${mn(summary.units_shipped)} units shipped` : 'No units data', color: 'var(--text-primary)', bg: 'var(--bg-card)' },
