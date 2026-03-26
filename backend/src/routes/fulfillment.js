@@ -191,6 +191,29 @@ router.get('/order-cost-sheet', async (req, res) => {
   });
 });
 
+// ── Auto-classify line items by description keywords ─────────────────────────
+function autoClassifyLineItem(li) {
+  const desc = (li.description || '').toUpperCase();
+  // Outbound variable — dispatch lines (per_order)
+  if (desc.includes('DESPATCH') || desc.includes('PACK LABEL') || desc.includes('PACK, LABEL')) {
+    return { ...li, category: 'outbound', cost_type: 'variable', variable_type: 'per_order' };
+  }
+  // Outbound variable — pick/pack (per_unit)
+  if ((desc.includes('PICK') && desc.includes('PACK')) || desc.includes('PER UNIT')) {
+    return { ...li, category: 'outbound', cost_type: 'variable', variable_type: 'per_unit' };
+  }
+  // Inbound fixed
+  if (desc.includes('RECEIV') || desc.includes('PUT AWAY') || desc.includes('STORAGE') ||
+      desc.includes('PALLET WRAPPING') || desc.includes('GENERAL LABOUR') || desc.includes('PACKAGING')) {
+    return { ...li, category: 'inbound', cost_type: 'fixed', variable_type: null };
+  }
+  // Delivery — variable per_order (lump sum divided across orders)
+  if (desc.includes('DELIVERY') || desc.includes('FREIGHT')) {
+    return { ...li, category: 'delivery', cost_type: 'variable', variable_type: 'per_order' };
+  }
+  return li;
+}
+
 // ── POST /api/fulfillment/parse-pdf ───────────────────────────────────────────
 router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
   // Multi-page PDFs (e.g. 6-page Statement of Account) can take 60-90s to parse.
@@ -233,6 +256,7 @@ Return this exact JSON structure:
 {
   "invoice_ref": "string or null",
   "invoice_date": "YYYY-MM-DD or null",
+  "due_date": "YYYY-MM-DD or null (look for 'Due DD-Mon-YY' or payment terms)",
   "period_description": "string e.g. Warehouse charges WE 20260301",
   "units_shipped": number or null,
   "orders_dispatched": number or null,
@@ -252,7 +276,10 @@ Return this exact JSON structure:
 
 For units_shipped: use quantity from PICK PACK SHIP Per unit line (highest quantity = units).
 For orders_dispatched: use quantity from Admin Order Processing Despatch or Pack label dispatch lines.
-For amounts: use ex-GST amount. Extract ALL line items.`;
+For amounts: use ex-GST amount. Extract ALL line items.
+
+IMPORTANT: If the document is a Statement of Account or contains multiple invoices, return a JSON ARRAY of invoice objects — one per invoice. Each object must follow the exact same structure above. If single invoice, return a single object (not an array).
+Always extract "due_date" from payment terms like "Due 14-Mar-26" or "NET 14 DAYS" on each invoice.`;
 
   try {
     const message = await anthropic.messages.create({
@@ -278,37 +305,29 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
       console.error('[parse-pdf] JSON parse failed. Cleaned text:', clean.slice(0, 500));
       return res.status(422).json({ error: 'Claude response was not valid JSON', raw: clean.slice(0, 1000) });
     }
-    console.log('[parse-pdf] Parsed keys:', Object.keys(parsed), '| line_items?', Array.isArray(parsed.line_items), '| invoices?', Array.isArray(parsed.invoices));
+    console.log('[parse-pdf] Parsed type:', Array.isArray(parsed) ? 'array' : typeof parsed,
+      '| keys:', Array.isArray(parsed) ? `[${parsed.length} items]` : Object.keys(parsed));
 
-    // Multi-invoice PDFs (Statement of Account) — Claude may return:
-    //   1. A top-level array: [ {invoice}, {invoice}, ... ]
+    // Normalize to array of invoices — Claude may return:
+    //   1. A top-level array: [ {invoice}, ... ]
     //   2. An object with invoices key: { invoices: [...] }
-    // Normalize both into { invoices: [...] } before merging.
+    //   3. A single invoice object: { line_items: [...] }
+    let invoices;
     if (Array.isArray(parsed)) {
-      parsed = { invoices: parsed };
-    }
-    if (!parsed.line_items && Array.isArray(parsed.invoices)) {
-      const invoices = parsed.invoices;
-      const merged = {
-        invoice_ref: invoices.map(i => i.invoice_ref).filter(Boolean).join(', ') || null,
-        invoice_date: invoices[0]?.invoice_date || null,
-        period_description: parsed.period_description || invoices.map(i => i.period_description).filter(Boolean).join('; ') || null,
-        units_shipped: invoices.reduce((s, i) => s + (i.units_shipped || 0), 0) || null,
-        orders_dispatched: invoices.reduce((s, i) => s + (i.orders_dispatched || 0), 0) || null,
-        line_items: invoices.flatMap(i => (i.line_items || []).map(li => ({
-          ...li,
-          description: invoices.length > 1 ? `[${i.invoice_ref || i.period_description || 'Invoice'}] ${li.description}` : li.description,
-        }))),
-      };
-      parsed = merged;
+      invoices = parsed;
+    } else if (Array.isArray(parsed.invoices)) {
+      invoices = parsed.invoices;
+    } else {
+      invoices = [parsed];
     }
 
-    // Ensure line_items always exists
-    if (!Array.isArray(parsed.line_items)) {
-      parsed.line_items = [];
+    // Ensure each invoice has line_items, apply auto-classification
+    for (const inv of invoices) {
+      if (!Array.isArray(inv.line_items)) inv.line_items = [];
+      inv.line_items = inv.line_items.map(autoClassifyLineItem);
     }
 
-    res.json(parsed);
+    res.json({ invoices });
   } catch (err) {
     console.error('PDF parse error:', err.message);
     res.status(500).json({ error: 'Failed to parse PDF: ' + err.message });
@@ -317,7 +336,7 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
 
 // ── POST /api/fulfillment/invoices ────────────────────────────────────────────
 router.post('/invoices', async (req, res) => {
-  const { invoice_ref, invoice_date, period_description, units_shipped, orders_dispatched, line_items } = req.body;
+  const { invoice_ref, invoice_date, due_date, period_description, units_shipped, orders_dispatched, line_items } = req.body;
 
   if (!invoice_date || !line_items || line_items.length === 0)
     return res.status(400).json({ error: 'invoice_date and line_items are required' });
@@ -331,6 +350,7 @@ router.post('/invoices', async (req, res) => {
     .insert({
       invoice_ref:        invoice_ref || null,
       invoice_date,
+      due_date:           due_date || null,
       period_description: period_description || null,
       units_shipped:      units_shipped || null,
       orders_dispatched:  orders_dispatched || null,

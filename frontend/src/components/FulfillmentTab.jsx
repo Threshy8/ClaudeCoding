@@ -58,6 +58,7 @@ function InvoicesView({ dateRange }) {
   const [saving, setSaving]             = useState(false);
   const [invoiceSummary, setInvoiceSummary]   = useState(null);
   const [summaryLoading, setSummaryLoading]   = useState(false);
+  const [activeTab, setActiveTab]             = useState(0);
   const fileRef = useRef();
   const { mc, mn } = useDemoMask();
 
@@ -113,34 +114,57 @@ function InvoicesView({ dateRange }) {
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setUploading(true); setUploadError(null); setParsed(null);
+    setUploading(true); setUploadError(null); setParsed(null); setActiveTab(0);
     try {
       const formData = new FormData();
       formData.append('pdf', file);
       const res = await fetch(`${BASE_URL}/api/fulfillment/parse-pdf`, { method: 'POST', body: formData });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Parse failed'); }
       const result = await res.json();
-      if (!result || !Array.isArray(result.line_items)) {
-        throw new Error('Unexpected response format — no line items found in parsed invoice');
+      if (!result?.invoices?.length) {
+        throw new Error('No invoices could be extracted from this PDF');
       }
-      if (result.line_items.length === 0) {
-        throw new Error('No line items could be extracted from this PDF');
+      for (const inv of result.invoices) {
+        if (!Array.isArray(inv.line_items) || inv.line_items.length === 0) {
+          throw new Error(`Invoice ${inv.invoice_ref || 'unknown'} has no line items`);
+        }
       }
       setParsed(result);
-      generateSummary(result);
+      if (result.invoices.length === 1) generateSummary(result.invoices[0]);
     } catch (err) { setUploadError(err.message); }
     finally { setUploading(false); if (fileRef.current) fileRef.current.value = ''; }
   };
 
-  const handleSave = async () => {
-    setSaving(true);
+  const handleSaveOne = async (invIdx) => {
+    setSaving(true); setUploadError(null);
     try {
       await apiFetch('/api/fulfillment/invoices', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsed),
+        body: JSON.stringify(parsed.invoices[invIdx]),
       });
-      setParsed(null); setInvoiceSummary(null); load();
+      const remaining = parsed.invoices.filter((_, i) => i !== invIdx);
+      if (remaining.length === 0) {
+        setParsed(null); setInvoiceSummary(null); setActiveTab(0);
+      } else {
+        setParsed({ ...parsed, invoices: remaining });
+        setActiveTab(Math.min(activeTab, remaining.length - 1));
+      }
+      load();
+    } catch (e) { setUploadError(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleSaveAll = async () => {
+    setSaving(true); setUploadError(null);
+    try {
+      for (const inv of parsed.invoices) {
+        await apiFetch('/api/fulfillment/invoices', {
+          method: 'POST',
+          body: JSON.stringify(inv),
+        });
+      }
+      setParsed(null); setInvoiceSummary(null); setActiveTab(0);
+      load();
     } catch (e) { setUploadError(e.message); }
     finally { setSaving(false); }
   };
@@ -154,12 +178,26 @@ function InvoicesView({ dateRange }) {
     } catch (e) { alert('Delete failed: ' + e.message); }
   };
 
-  const updateParsedLine = (idx, field, value) => {
+  const updateParsedLine = (invIdx, lineIdx, field, value) => {
     setParsed(prev => {
-      if (!prev?.line_items) return prev;
-      const items = [...prev.line_items];
-      items[idx] = { ...items[idx], [field]: value };
-      return { ...prev, line_items: items };
+      if (!prev?.invoices?.[invIdx]?.line_items) return prev;
+      const invoices = prev.invoices.map((inv, i) => {
+        if (i !== invIdx) return inv;
+        const items = [...inv.line_items];
+        items[lineIdx] = { ...items[lineIdx], [field]: value };
+        return { ...inv, line_items: items };
+      });
+      return { ...prev, invoices };
+    });
+  };
+
+  const updateParsedInvoice = (invIdx, field, value) => {
+    setParsed(prev => {
+      if (!prev?.invoices?.[invIdx]) return prev;
+      const invoices = prev.invoices.map((inv, i) =>
+        i === invIdx ? { ...inv, [field]: value } : inv
+      );
+      return { ...prev, invoices };
     });
   };
 
@@ -198,110 +236,174 @@ function InvoicesView({ dateRange }) {
       {error       && <div className="error-msg">{error}</div>}
 
       {/* Parsed review panel */}
-      {parsed && (
+      {parsed && parsed.invoices && (
         <div className="card" style={{ marginBottom: 24, border: '1.5px solid var(--accent)', padding: 20 }}>
+          {/* Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
             <div>
-              <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>Review Parsed Invoice</div>
-              <div className="text-muted" style={{ fontSize: 13 }}>
-                {parsed.period_description || 'No period'} · {fmtDate(parsed.invoice_date)}
-                {parsed.invoice_ref   && ` · Ref: ${parsed.invoice_ref}`}
-                {parsed.units_shipped && ` · ${mn(parsed.units_shipped)} units shipped`}
+              <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
+                Review Parsed Invoice{parsed.invoices.length > 1 ? 's' : ''}
+                {parsed.invoices.length > 1 && <span className="text-muted" style={{ fontWeight: 400, marginLeft: 8 }}>({parsed.invoices.length} invoices)</span>}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-ghost" onClick={() => { setParsed(null); setInvoiceSummary(null); }}>Discard</button>
-              <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save Invoice'}</button>
+              <button className="btn btn-ghost" onClick={() => { setParsed(null); setInvoiceSummary(null); setActiveTab(0); }}>Discard All</button>
+              {parsed.invoices.length > 1 && (
+                <button className="btn btn-primary" onClick={handleSaveAll} disabled={saving}>
+                  {saving ? 'Saving…' : `Save All (${parsed.invoices.length})`}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* AI summary banner */}
-          <div style={{
-            background: 'var(--accent-dim)', border: '1px solid var(--accent)', borderRadius: 8,
-            padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10,
-          }}>
-            <span style={{ fontSize: 16, marginTop: 1 }}>✦</span>
-            <div style={{ fontSize: 13, color: 'var(--accent)', lineHeight: 1.5, fontWeight: 500 }}>
-              {summaryLoading ? 'Generating summary…' : (invoiceSummary || '')}
+          {/* AI summary (single invoice only) */}
+          {parsed.invoices.length === 1 && (invoiceSummary || summaryLoading) && (
+            <div style={{
+              background: 'var(--accent-dim)', border: '1px solid var(--accent)', borderRadius: 8,
+              padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10,
+            }}>
+              <span style={{ fontSize: 16, marginTop: 1 }}>✦</span>
+              <div style={{ fontSize: 13, color: 'var(--accent)', lineHeight: 1.5, fontWeight: 500 }}>
+                {summaryLoading ? 'Generating summary…' : (invoiceSummary || '')}
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th>Category</th>
-                  <th>Cost Type</th>
-                  <th>Variable Type</th>
-                  <th className="text-right">Qty</th>
-                  <th className="text-right">Rate</th>
-                  <th className="text-right">Ex GST</th>
-                  <th className="text-right">GST</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parsed.line_items.map((li, idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontSize: 13 }}>{li.description}</td>
-                    <td>
-                      <EditableSelect value={li.category} onChange={v => updateParsedLine(idx, 'category', v)}
-                        options={[['inbound','Inbound'],['outbound','Outbound'],['delivery','Delivery'],['other','Other']]}
-                        color={CATEGORY_COLOR[li.category]} />
-                    </td>
-                    <td>
-                      <EditableSelect value={li.cost_type} onChange={v => updateParsedLine(idx, 'cost_type', v)}
-                        options={[['variable','Variable'],['fixed','Fixed']]}
-                        color={COST_TYPE_COLOR[li.cost_type]} />
-                    </td>
-                    <td>
-                      {li.cost_type === 'variable' ? (
-                        <EditableSelect
-                          value={li.variable_type || 'per_unit'}
-                          onChange={v => updateParsedLine(idx, 'variable_type', v)}
-                          options={[['per_order','Per Order'],['per_unit','Per Unit']]}
-                          color={li.variable_type === 'per_order' ? '#f59e0b' : '#8b5cf6'} />
-                      ) : (
-                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
-                      )}
-                    </td>
-                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{mn(li.quantity ?? '—')}</td>
-                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.unit_rate ? mc(_fmt(li.unit_rate)) : '—'}</td>
-                    <td className="text-right" style={{ fontSize: 13, fontWeight: 500 }}>{mc(_fmt(li.amount_ex_gst))}</td>
-                    <td className="text-right text-muted" style={{ fontSize: 13 }}>{mc(_fmt(li.gst))}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr style={{ borderTop: '2px solid var(--border)' }}>
-                  <td colSpan={6} style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>Total</td>
-                  <td className="text-right" style={{ fontWeight: 700, fontSize: 14, paddingTop: 10 }}>
-                    {mc(_fmt(parsed.line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0)))}
-                  </td>
-                  <td className="text-right" style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>
-                    {mc(_fmt(parsed.line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0)))}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+          {/* Tabs (multi-invoice) */}
+          {parsed.invoices.length > 1 && (
+            <div style={{ display: 'flex', gap: 4, marginBottom: 16, flexWrap: 'wrap' }}>
+              {parsed.invoices.map((inv, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setActiveTab(idx)}
+                  style={{
+                    padding: '6px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer',
+                    fontWeight: activeTab === idx ? 600 : 400,
+                    border: activeTab === idx ? '1.5px solid var(--accent)' : '1.5px solid var(--border)',
+                    background: activeTab === idx ? 'var(--accent-dim)' : 'transparent',
+                    color: activeTab === idx ? 'var(--accent)' : 'var(--text-muted)',
+                  }}
+                >
+                  {inv.invoice_ref || `Invoice ${idx + 1}`}
+                  {inv.invoice_date && ` · ${fmtDate(inv.invoice_date)}`}
+                </button>
+              ))}
+            </div>
+          )}
 
-          {/* Category + type badges */}
-          <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
-            {[['inbound','inbound',CATEGORY_COLOR],['outbound','outbound',CATEGORY_COLOR],['variable','variable',COST_TYPE_COLOR],['fixed','fixed',COST_TYPE_COLOR]].map(([key, field, colorMap]) => {
-              const total = parsed.line_items
-                .filter(li => li.category === key || li.cost_type === key)
-                .reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
-              if (total === 0) return null;
-              const label = CATEGORY_LABEL[key] || COST_TYPE_LABEL[key];
-              const color = colorMap[key];
-              return (
-                <div key={key} style={{ padding: '5px 12px', borderRadius: 20, background: `${color}18`, border: `1px solid ${color}40`, fontSize: 12, color, fontWeight: 600 }}>
-                  {label}: {mc(_fmt(total))}
+          {/* Active invoice content */}
+          {(() => {
+            const inv = parsed.invoices[activeTab];
+            if (!inv) return null;
+            return (
+              <div>
+                {/* Invoice meta + due date + save */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                  <div className="text-muted" style={{ fontSize: 13 }}>
+                    {inv.period_description || 'No period'} · {fmtDate(inv.invoice_date)}
+                    {inv.invoice_ref && ` · Ref: ${inv.invoice_ref}`}
+                    {inv.units_shipped != null && inv.units_shipped > 0 && ` · ${mn(inv.units_shipped)} units shipped`}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 500 }}>Due:</label>
+                      <input
+                        type="date"
+                        value={inv.due_date || ''}
+                        onChange={e => updateParsedInvoice(activeTab, 'due_date', e.target.value || null)}
+                        style={{
+                          fontSize: 12, padding: '4px 8px', borderRadius: 6,
+                          border: '1px solid var(--border)', background: 'var(--bg-card)',
+                          color: 'var(--text-primary)',
+                        }}
+                      />
+                    </div>
+                    <button className="btn btn-primary btn-sm" onClick={() => handleSaveOne(activeTab)} disabled={saving}>
+                      {saving ? 'Saving…' : `Save ${inv.invoice_ref || 'Invoice'}`}
+                    </button>
+                  </div>
                 </div>
-              );
-            })}
-          </div>
+
+                {/* Line items table */}
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Description</th>
+                        <th>Category</th>
+                        <th>Cost Type</th>
+                        <th>Variable Type</th>
+                        <th className="text-right">Qty</th>
+                        <th className="text-right">Rate</th>
+                        <th className="text-right">Ex GST</th>
+                        <th className="text-right">GST</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(inv.line_items || []).map((li, idx) => (
+                        <tr key={idx}>
+                          <td style={{ fontSize: 13 }}>{li.description}</td>
+                          <td>
+                            <EditableSelect value={li.category} onChange={v => updateParsedLine(activeTab, idx, 'category', v)}
+                              options={[['inbound','Inbound'],['outbound','Outbound'],['delivery','Delivery'],['other','Other']]}
+                              color={CATEGORY_COLOR[li.category]} />
+                          </td>
+                          <td>
+                            <EditableSelect value={li.cost_type} onChange={v => updateParsedLine(activeTab, idx, 'cost_type', v)}
+                              options={[['variable','Variable'],['fixed','Fixed']]}
+                              color={COST_TYPE_COLOR[li.cost_type]} />
+                          </td>
+                          <td>
+                            {li.cost_type === 'variable' ? (
+                              <EditableSelect
+                                value={li.variable_type || 'per_unit'}
+                                onChange={v => updateParsedLine(activeTab, idx, 'variable_type', v)}
+                                options={[['per_order','Per Order'],['per_unit','Per Unit']]}
+                                color={li.variable_type === 'per_order' ? '#f59e0b' : '#8b5cf6'} />
+                            ) : (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+                            )}
+                          </td>
+                          <td className="text-right text-muted" style={{ fontSize: 13 }}>{mn(li.quantity ?? '—')}</td>
+                          <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.unit_rate ? mc(_fmt(li.unit_rate)) : '—'}</td>
+                          <td className="text-right" style={{ fontSize: 13, fontWeight: 500 }}>{mc(_fmt(li.amount_ex_gst))}</td>
+                          <td className="text-right text-muted" style={{ fontSize: 13 }}>{mc(_fmt(li.gst))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop: '2px solid var(--border)' }}>
+                        <td colSpan={6} style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>Total</td>
+                        <td className="text-right" style={{ fontWeight: 700, fontSize: 14, paddingTop: 10 }}>
+                          {mc(_fmt((inv.line_items || []).reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0)))}
+                        </td>
+                        <td className="text-right" style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>
+                          {mc(_fmt((inv.line_items || []).reduce((s, li) => s + (parseFloat(li.gst) || 0), 0)))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+
+                {/* Category + type badges */}
+                <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+                  {[['inbound','inbound',CATEGORY_COLOR],['outbound','outbound',CATEGORY_COLOR],['delivery','delivery',CATEGORY_COLOR],['variable','variable',COST_TYPE_COLOR],['fixed','fixed',COST_TYPE_COLOR]].map(([key, field, colorMap]) => {
+                    const total = (inv.line_items || [])
+                      .filter(li => li.category === key || li.cost_type === key)
+                      .reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
+                    if (total === 0) return null;
+                    const label = CATEGORY_LABEL[key] || COST_TYPE_LABEL[key];
+                    const color = colorMap[key];
+                    return (
+                      <div key={key} style={{ padding: '5px 12px', borderRadius: 20, background: `${color}18`, border: `1px solid ${color}40`, fontSize: 12, color, fontWeight: 600 }}>
+                        {label}: {mc(_fmt(total))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -823,12 +925,12 @@ function InvoiceCostTypTotal({ invoiceId, lineItems, costType }) {
 function LineItemsTable({ items }) {
   const { mc, mn } = useDemoMask();
   if (!items.length) return <div className="text-muted" style={{ fontSize: 13 }}>No line items.</div>;
-  const grouped = { inbound: [], outbound: [], other: [] };
+  const grouped = { inbound: [], outbound: [], delivery: [], other: [] };
   for (const li of items) (grouped[li.category] || grouped.other).push(li);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {['inbound', 'outbound', 'other'].map(cat => {
+      {['inbound', 'outbound', 'delivery', 'other'].map(cat => {
         if (!grouped[cat].length) return null;
         const catTotal = grouped[cat].reduce((s, li) => s + parseFloat(li.amount_ex_gst || 0), 0);
         return (
