@@ -16,6 +16,7 @@ function RefundsView({ dateRange }) {
   const [search, setSearch]       = useState('');
   const [sortField, setSortField] = useState('refund_date');
   const [sortDir, setSortDir]     = useState('desc');
+  const [showZero, setShowZero]   = useState(false);
   const { mc, mn } = useDemoMask();
 
   useEffect(() => {
@@ -39,6 +40,7 @@ function RefundsView({ dateRange }) {
   }
 
   const filtered = refunds.filter(r => {
+    if (!showZero && (parseFloat(r.refund_subtotal) || 0) === 0) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -84,7 +86,7 @@ function RefundsView({ dateRange }) {
     bySku[r.sku].units += r.quantity_refunded || 0;
     bySku[r.sku].value += parseFloat(r.refund_subtotal) || 0;
   }
-  const skuSummary = Object.values(bySku).sort((a, b) => b.units - a.units);
+  const skuSummary = Object.values(bySku).filter(s => s.value > 0).sort((a, b) => b.value - a.value);
 
   return (
     <div>
@@ -107,40 +109,58 @@ function RefundsView({ dateRange }) {
         ))}
       </div>
 
-      {/* SKU breakdown */}
+      {/* SKU breakdown table */}
       {skuSummary.length > 0 && (
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 10 }}>By SKU</div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            {skuSummary.map(s => (
-              <div key={s.sku} style={{
-                background: 'var(--bg-card)', border: '1px solid var(--border)',
-                borderRadius: 8, padding: '10px 14px', fontSize: 13,
-              }}>
-                <span style={{ fontWeight: 600 }}>{s.sku}</span>
-                <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>{mn(s.units)} units</span>
-                <span style={{ color: '#ef4444', marginLeft: 8 }}>{mc(_fmt(s.value))}</span>
-              </div>
-            ))}
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div style={{ padding: '14px 18px 10px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)' }}>Returns by Product</div>
+          </div>
+          <div className="table-wrap">
+            <table style={{ width: '100%', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ padding: '8px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Product</th>
+                  <th style={{ padding: '8px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>SKU</th>
+                  <th style={{ padding: '8px 14px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Units Returned</th>
+                  <th style={{ padding: '8px 14px', textAlign: 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Refund Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skuSummary.map(s => (
+                  <tr key={s.sku} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '8px 14px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.product_name || s.sku}</td>
+                    <td style={{ padding: '8px 14px' }}><span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{s.sku}</span></td>
+                    <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 600 }}>{mn(s.units)}</td>
+                    <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>{mc(_fmt(s.value))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      {/* Search + table */}
+      {/* Search + $0 toggle + table */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)' }}>
           Refund Transactions {sorted.length > 0 && `(${sorted.length})`}
         </div>
-        <input
-          placeholder="Search SKU, order #..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{
-            padding: '6px 12px', borderRadius: 6, fontSize: 13,
-            border: '1px solid var(--border)', background: 'var(--bg)',
-            width: 220, outline: 'none',
-          }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showZero} onChange={e => setShowZero(e.target.checked)} />
+            Show $0 refunds
+          </label>
+          <input
+            placeholder="Search SKU, order #..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{
+              padding: '6px 12px', borderRadius: 6, fontSize: 13,
+              border: '1px solid var(--border)', background: 'var(--bg)',
+              width: 220, outline: 'none',
+            }}
+          />
+        </div>
       </div>
 
       {error && <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>{error}</div>}
@@ -182,9 +202,15 @@ function RefundsView({ dateRange }) {
             <tbody>
               {sorted.map((r, i) => {
                 const days = daysBetween(r.order_date, r.refund_date);
-                const daysColor = days == null ? 'var(--text-muted)' : days > 30 ? '#ef4444' : days > 14 ? '#f59e0b' : '#16a34a';
+                const daysColor = days == null ? 'var(--text-muted)' : days > 14 ? '#ef4444' : days > 7 ? '#f59e0b' : '#16a34a';
+                const isRedo = (r.sku || '').toLowerCase() === 'x-redo';
+                const isNoSku = (r.sku || '').startsWith('NO-SKU-');
+                const rowStyle = {
+                  borderBottom: '1px solid var(--border)',
+                  ...(isRedo ? { fontStyle: 'italic', color: 'var(--text-muted)' } : {}),
+                };
                 return (
-                  <tr key={`${r.shopify_refund_id}-${r.sku}-${i}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <tr key={`${r.shopify_refund_id}-${r.sku}-${i}`} style={rowStyle}>
                     <td style={{ padding: '8px 10px' }}>
                       <span className="mono" style={{ fontSize: 12 }}>
                         #{r.order_number || r.shopify_order_id}
@@ -197,8 +223,12 @@ function RefundsView({ dateRange }) {
                         <span style={{ fontSize: 12, fontWeight: 600, color: daysColor }}>{mn(`${days}d`)}</span>
                       ) : '—'}
                     </td>
-                    <td style={{ padding: '8px 10px', fontWeight: 600 }}>{r.sku}</td>
-                    <td style={{ padding: '8px 10px', color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.product_name}</td>
+                    <td style={{ padding: '8px 10px', fontWeight: isRedo ? 400 : 600 }}>
+                      {isNoSku ? <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>{r.product_name || r.sku}</span> : r.sku}
+                    </td>
+                    <td style={{ padding: '8px 10px', color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {isRedo ? <span style={{ fontStyle: 'italic' }}>Redo Fee</span> : r.product_name}
+                    </td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{mn(r.quantity_refunded)}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', color: '#ef4444', fontWeight: 600 }}>{mc(_fmt(r.refund_subtotal))}</td>
                   </tr>
