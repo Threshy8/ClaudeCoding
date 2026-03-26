@@ -912,18 +912,23 @@ router.get('/entries/by-order', async (req, res) => {
 // Returns current stock levels per SKU with values and sales velocity
 router.get('/inventory/summary', async (req, res) => {
   const store = req.query.store || 'au';
+  console.log('[inventory/summary] start, store=', store);
 
   try {
     // 1. Get all lots with remaining stock
+    console.log('[inventory/summary] querying purchase_order_lines...');
     const { data: lots, error: lotsErr } = await supabase
       .from('purchase_order_lines')
       .select('sku, product_name, unit_cost, quantity_remaining, po_number, location')
       .gt('quantity_remaining', 0);
-    if (lotsErr) return res.status(500).json({ error: lotsErr.message });
+    if (lotsErr) { console.error('[inventory/summary] lotsErr:', lotsErr.message); return res.status(500).json({ error: lotsErr.message }); }
+    console.log('[inventory/summary] purchase_order_lines rows:', lots?.length);
     if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
 
     // 1b. Get stock adjustment deltas (physical count corrections)
+    console.log('[inventory/summary] querying stock_adjustments...');
     const adjDeltas = await getStockAdjustmentDeltas();
+    console.log('[inventory/summary] adjDeltas keys:', Object.keys(adjDeltas).length);
 
     // Group by SKU (accumulate cost in cents)
     const skuMap = {};
@@ -948,6 +953,7 @@ router.get('/inventory/summary', async (req, res) => {
     }
 
     // 2. Get sales this calendar month
+    console.log('[inventory/summary] querying shopify_sales (month)...');
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const { data: monthSales } = await supabase
@@ -963,6 +969,7 @@ router.get('/inventory/summary', async (req, res) => {
     }
 
     // 3. Get avg sale price per SKU (last 30 days, in cents)
+    console.log('[inventory/summary] querying shopify_sales (30d prices)...');
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const { data: recentSales } = await supabase
       .from('shopify_sales')
@@ -980,6 +987,7 @@ router.get('/inventory/summary', async (req, res) => {
     }
 
     // 4. Build response
+    console.log('[inventory/summary] building response...');
     const skus = Object.values(skuMap).map(s => {
       const avgUnitCostCents = s.quantity_remaining > 0 ? s.totalCostCents / s.quantity_remaining : 0;
       const sp = salePriceMap[s.sku];
@@ -1010,6 +1018,7 @@ router.get('/inventory/summary', async (req, res) => {
     });
   } catch (err) {
     console.error('Inventory summary error:', err.message);
+    console.error('Inventory summary stack:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
