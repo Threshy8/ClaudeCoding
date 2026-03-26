@@ -251,7 +251,7 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-4-5',
       max_tokens: 2000,
       messages: [{
         role: 'user',
@@ -487,7 +487,7 @@ router.post('/summarise', async (req, res) => {
   if (!line_items?.length) return res.status(400).json({ error: 'No line items' });
 
   const msg = await anthropic.messages.create({
-    model: 'claude-opus-4-6',
+    model: 'claude-opus-4-5',
     max_tokens: 200,
     messages: [{
       role: 'user',
