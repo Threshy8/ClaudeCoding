@@ -445,7 +445,7 @@ function InvoicesView({ dateRange }) {
                     <React.Fragment key={inv.id}>
                       <tr style={{ cursor: 'pointer' }} onClick={() => toggleExpand(inv.id)}>
                         <td className="text-muted">{fmtDate(inv.invoice_date)}</td>
-                        <td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
                           <span style={{ fontWeight: 500 }}>{inv.period_description || '—'}</span>
                           {inv.invoice_ref && <span className="text-muted" style={{ fontSize: 12, marginLeft: 8 }}>{inv.invoice_ref}</span>}
                         </td>
