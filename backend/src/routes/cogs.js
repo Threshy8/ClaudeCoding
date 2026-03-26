@@ -908,6 +908,25 @@ router.get('/entries/by-order', async (req, res) => {
   }
 });
 
+// ── GET /api/inventory/debug ─────────────────────────────────────────────────
+// Lightweight diagnostic: tests each query the summary endpoint uses
+router.get('/inventory/debug', async (req, res) => {
+  const results = {};
+  try {
+    const { data: d1, error: e1 } = await supabase.from('purchase_order_lines').select('sku', { count: 'exact', head: true });
+    results.purchase_order_lines = e1 ? `ERROR: ${e1.message}` : 'ok';
+  } catch (e) { results.purchase_order_lines = `CRASH: ${e.message}`; }
+  try {
+    const { data: d2, error: e2 } = await supabase.from('stock_adjustments').select('sku', { count: 'exact', head: true });
+    results.stock_adjustments = e2 ? `ERROR: ${e2.message}` : 'ok';
+  } catch (e) { results.stock_adjustments = `CRASH: ${e.message}`; }
+  try {
+    const { data: d3, error: e3 } = await supabase.from('shopify_sales').select('sku', { count: 'exact', head: true });
+    results.shopify_sales = e3 ? `ERROR: ${e3.message}` : 'ok';
+  } catch (e) { results.shopify_sales = `CRASH: ${e.message}`; }
+  res.json(results);
+});
+
 // ── GET /api/inventory/summary ───────────────────────────────────────────────
 // Returns current stock levels per SKU with values and sales velocity
 router.get('/inventory/summary', async (req, res) => {
