@@ -34,7 +34,7 @@ router.get('/summary', async (req, res) => {
 
   let query = supabase
     .from('fulfillment_invoices')
-    .select('id, invoice_date, invoice_ref, period_description, total_ex_gst, total_inc_gst, units_shipped');
+    .select('id, invoice_date, invoice_ref, period_description, total_ex_gst, total_inc_gst, units_shipped, payment_status, paid_date');
   if (start_date) query = query.gte('invoice_date', start_date);
   if (end_date)   query = query.lte('invoice_date', end_date);
 
@@ -62,8 +62,9 @@ router.get('/summary', async (req, res) => {
   for (const li of (lineItems || [])) {
     const amt = parseFloat(li.amount_ex_gst) || 0;
     totals.total += amt;
-    if (li.category === 'inbound')       totals.inbound  += amt;
+    if (li.category === 'inbound')        totals.inbound  += amt;
     else if (li.category === 'outbound') totals.outbound += amt;
+    else if (li.category === 'delivery') totals.delivery += amt;
     else                                  totals.other    += amt;
     if (li.cost_type === 'fixed')        totals.fixed    += amt;
     else                                  totals.variable += amt;
