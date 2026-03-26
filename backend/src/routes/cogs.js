@@ -937,7 +937,7 @@ router.get('/inventory/debug', async (req, res) => {
   try {
     const { data: lots, error: lotsErr } = await supabase
       .from('purchase_order_lines')
-      .select('sku, product_name, unit_cost, quantity_remaining, po_number, location')
+      .select('sku, product_name, unit_cost, quantity_remaining, po_number')
       .gt('quantity_remaining', 0);
     results.lots_fetch = lotsErr ? `ERROR: ${lotsErr.message}` : `ok (${lots?.length} rows)`;
   } catch (e) { results.lots_fetch = `CRASH: ${e.message}`; }
@@ -956,7 +956,7 @@ router.get('/inventory/summary', async (req, res) => {
     console.log('[inventory/summary] querying purchase_order_lines...');
     const { data: lots, error: lotsErr } = await supabase
       .from('purchase_order_lines')
-      .select('sku, product_name, unit_cost, quantity_remaining, po_number, location')
+      .select('sku, product_name, unit_cost, quantity_remaining, po_number')
       .gt('quantity_remaining', 0);
     if (lotsErr) { console.error('[inventory/summary] lotsErr:', lotsErr.message); return res.status(500).json({ error: lotsErr.message }); }
     console.log('[inventory/summary] purchase_order_lines rows:', lots?.length);
@@ -971,12 +971,11 @@ router.get('/inventory/summary', async (req, res) => {
     const skuMap = {};
     for (const lot of lots) {
       if (!skuMap[lot.sku]) {
-        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set(), locations: new Set() };
+        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set() };
       }
       skuMap[lot.sku].quantity_remaining += lot.quantity_remaining;
       skuMap[lot.sku].totalCostCents += toCents(lot.unit_cost) * lot.quantity_remaining;
       if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
-      if (lot.location) skuMap[lot.sku].locations.add(lot.location);
     }
 
     // Apply stock adjustment deltas
@@ -1039,7 +1038,6 @@ router.get('/inventory/summary', async (req, res) => {
         retail_value: Math.round(s.quantity_remaining * avgSalePriceCents) / 100,
         units_sold_this_month: monthSoldMap[s.sku] || 0,
         po_numbers: [...s.po_numbers],
-        locations: [...s.locations],
         low_stock: s.quantity_remaining < 10,
       };
     });
