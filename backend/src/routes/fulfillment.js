@@ -265,7 +265,6 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
           { type: 'text', text: prompt },
         ],
       }],
-      timeout: 120_000, // 120s — multi-page PDFs need more time
     });
 
     const raw   = message.content[0].text.trim();
