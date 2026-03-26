@@ -120,6 +120,12 @@ function InvoicesView({ dateRange }) {
       const res = await fetch(`${BASE_URL}/api/fulfillment/parse-pdf`, { method: 'POST', body: formData });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Parse failed'); }
       const result = await res.json();
+      if (!result || !Array.isArray(result.line_items)) {
+        throw new Error('Unexpected response format — no line items found in parsed invoice');
+      }
+      if (result.line_items.length === 0) {
+        throw new Error('No line items could be extracted from this PDF');
+      }
       setParsed(result);
       generateSummary(result);
     } catch (err) { setUploadError(err.message); }
@@ -150,6 +156,7 @@ function InvoicesView({ dateRange }) {
 
   const updateParsedLine = (idx, field, value) => {
     setParsed(prev => {
+      if (!prev?.line_items) return prev;
       const items = [...prev.line_items];
       items[idx] = { ...items[idx], [field]: value };
       return { ...prev, line_items: items };

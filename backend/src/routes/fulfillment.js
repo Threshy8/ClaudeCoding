@@ -269,7 +269,32 @@ For amounts: use ex-GST amount. Extract ALL line items.`;
 
     const raw   = message.content[0].text.trim();
     const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-    res.json(JSON.parse(clean));
+    let parsed = JSON.parse(clean);
+
+    // Multi-invoice PDFs (Statement of Account) may return { invoices: [...] }
+    // instead of a single { line_items: [...] }. Merge into one flat structure.
+    if (!parsed.line_items && Array.isArray(parsed.invoices)) {
+      const invoices = parsed.invoices;
+      const merged = {
+        invoice_ref: invoices.map(i => i.invoice_ref).filter(Boolean).join(', ') || null,
+        invoice_date: invoices[0]?.invoice_date || null,
+        period_description: parsed.period_description || invoices.map(i => i.period_description).filter(Boolean).join('; ') || null,
+        units_shipped: invoices.reduce((s, i) => s + (i.units_shipped || 0), 0) || null,
+        orders_dispatched: invoices.reduce((s, i) => s + (i.orders_dispatched || 0), 0) || null,
+        line_items: invoices.flatMap(i => (i.line_items || []).map(li => ({
+          ...li,
+          description: invoices.length > 1 ? `[${i.invoice_ref || i.period_description || 'Invoice'}] ${li.description}` : li.description,
+        }))),
+      };
+      parsed = merged;
+    }
+
+    // Ensure line_items always exists
+    if (!Array.isArray(parsed.line_items)) {
+      parsed.line_items = [];
+    }
+
+    res.json(parsed);
   } catch (err) {
     console.error('PDF parse error:', err.message);
     res.status(500).json({ error: 'Failed to parse PDF: ' + err.message });
