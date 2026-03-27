@@ -322,7 +322,9 @@ router.post('/', async (req, res) => {
     const records = [];
     for (const ret of allReturns) {
       const orderName = ret.order?.name || '';
-      const returnDate = toStoreDate(ret.createdAt);
+      // Use updatedAt as return_date to match when Shopify processes the refund,
+      // not when Redo initiated the return. Fall back to createdAt if updatedAt missing.
+      const returnDate = toStoreDate(ret.updatedAt) || toStoreDate(ret.createdAt);
       if (!returnDate) continue;
 
       for (const item of (ret.items || [])) {
