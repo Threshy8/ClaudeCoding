@@ -164,10 +164,19 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   for (const r of periodRefunds) {
     if (r.order_number) periodRefundOrderSkuSet.add(`${r.order_number}|${r.sku}`);
   }
+  console.log(`[buildCogsData] period=${periodLabel} periodRedoReturns fetched: ${(periodRedoReturns || []).length}`);
+  console.log(`[buildCogsData] periodRefundOrderSkuSet (de-dup):`, [...periodRefundOrderSkuSet]);
   // Merge Redo returns into period refund map — skip if already in shopify_refunds
+  let redoSkipped = 0, redoAdded = 0;
   for (const r of (periodRedoReturns || [])) {
     const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
-    if (periodRefundOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
+    if (periodRefundOrderSkuSet.has(`${orderNum}|${r.sku}`)) {
+      console.log(`[buildCogsData] SKIPPED redo: order=${orderNum} sku=${r.sku} (already in shopify_refunds)`);
+      redoSkipped++;
+      continue;
+    }
+    console.log(`[buildCogsData] ADDED redo: order=${orderNum} sku=${r.sku} qty=${r.quantity_returned} amt=${r.refund_amount} return_date=${r.return_date}`);
+    redoAdded++;
     const sku = r.sku;
     if (!periodRefundMap[sku]) {
       periodRefundMap[sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0, details: [] };
@@ -182,6 +191,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       source: 'redo',
     });
   }
+  console.log(`[buildCogsData] period=${periodLabel} redo summary: ${redoAdded} added, ${redoSkipped} skipped (de-duped)`);
 
   // --- Build period gross sales summary per SKU ---
   // grossRevenueCents accumulates in integer cents
