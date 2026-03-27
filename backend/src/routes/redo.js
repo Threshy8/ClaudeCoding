@@ -58,15 +58,26 @@ async function fetchShopifyRefund(orderName, sku) {
   const base = storeUrl.replace(/\/$/, '');
   const orderNum = orderName.replace(/^#/, '');
 
-  try {
-    const url = `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(orderName)}&status=any&fields=id,name,order_number,refunds,shipping_lines`;
-    const response = await axios.get(url, {
-      headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
-    });
+  // Shopify order names may have a store suffix (e.g. #4758AUS)
+  // Try with suffix first, then without
+  const suffixes = ['AUS', ''];
+  let orders = [];
 
-    const orders = response.data?.orders || [];
+  try {
+    for (const suffix of suffixes) {
+      const searchName = `#${orderNum}${suffix}`;
+      const url = `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(searchName)}&status=any&fields=id,name,order_number,refunds,shipping_lines`;
+      const response = await axios.get(url, {
+        headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
+      });
+      orders = response.data?.orders || [];
+      if (orders.length > 0) {
+        console.log(`[redo] Found Shopify order with name=${searchName}`);
+        break;
+      }
+    }
     if (orders.length === 0) {
-      console.log(`[redo] Shopify order ${orderName} not found`);
+      console.log(`[redo] Shopify order ${orderName} not found (tried suffixes: ${suffixes.join(', ')})`);
       return null;
     }
 
@@ -158,16 +169,23 @@ router.get('/shopify-refund', async (req, res) => {
     }
     if (!accessToken) return res.json({ error: 'No Shopify access token available' });
 
-    // Try both formats: #4758 and 4758
-    const nameWithHash = orderName.startsWith('#') ? orderName : `#${orderName}`;
-    const url = `${storeUrl}/admin/api/2024-01/orders.json?name=${encodeURIComponent(nameWithHash)}&status=any`;
-    const resp = await axios.get(url, {
-      headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
-    });
-    const orders = resp.data?.orders || [];
+    // Try with AUS suffix first, then without
+    const orderNum = orderName.replace(/^#/, '');
+    const suffixes = ['AUS', ''];
+    let orders = [];
+    let matchedName = '';
+    for (const suffix of suffixes) {
+      const searchName = `#${orderNum}${suffix}`;
+      const url = `${storeUrl}/admin/api/2024-01/orders.json?name=${encodeURIComponent(searchName)}&status=any`;
+      const resp = await axios.get(url, {
+        headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
+      });
+      orders = resp.data?.orders || [];
+      if (orders.length > 0) { matchedName = searchName; break; }
+    }
 
     if (orders.length === 0) {
-      return res.json({ found: false, searched_name: nameWithHash, message: 'No orders found' });
+      return res.json({ found: false, searched_names: suffixes.map(s => `#${orderNum}${s}`), message: 'No orders found' });
     }
 
     const order = orders[0];
@@ -192,7 +210,7 @@ router.get('/shopify-refund', async (req, res) => {
     }));
 
     // Also run fetchShopifyRefund to show what the sync would compute
-    const computed = await fetchShopifyRefund(nameWithHash, sku);
+    const computed = await fetchShopifyRefund(matchedName || `#${orderNum}`, sku);
 
     res.json({
       found: true,
