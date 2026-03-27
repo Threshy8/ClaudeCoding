@@ -8,6 +8,26 @@ const TOKEN = process.env.REDO_API_TOKEN;
 const STORE_ID = process.env.REDO_STORE_ID;
 const TZ = process.env.SHOPIFY_STORE_TIMEZONE || 'Australia/Sydney';
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function shopifyGet(url, accessToken, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await axios.get(url, {
+        headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
+      });
+    } catch (err) {
+      if (err.response?.status === 429 && attempt < retries) {
+        const retryAfter = parseFloat(err.response.headers['retry-after']) || 1;
+        console.log(`[redo] Rate limited (429), waiting ${retryAfter}s before retry ${attempt}/${retries}...`);
+        await sleep(retryAfter * 1000);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 function toStoreDate(isoString) {
   if (!isoString) return null;
   const d = new Date(isoString);
@@ -68,9 +88,7 @@ async function fetchShopifyRefund(orderName, sku) {
     for (const suffix of suffixes) {
       searchedName = `#${orderNum}${suffix}`;
       const url = `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(searchedName)}&status=any&fields=id,name,order_number,refunds,shipping_lines,line_items`;
-      const response = await axios.get(url, {
-        headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
-      });
+      const response = await shopifyGet(url, accessToken);
       allOrders = response.data?.orders || [];
       if (allOrders.length > 0) {
         console.log(`[redo] Found ${allOrders.length} Shopify order(s) with name=${searchedName}: ${allOrders.map(o => o.name).join(', ')}`);
@@ -409,6 +427,7 @@ router.post('/', async (req, res) => {
       const orderNum = (rec.shopify_order_name || '').replace(/^#/, '');
       if (salesOrderSet.has(orderNum)) continue; // Recent order, Redo amount is fine
 
+      if (crossCheckCount > 0) await sleep(600); // Rate limit: stay under 2 calls/sec
       crossCheckCount++;
       const shopifyRefund = await fetchShopifyRefund(rec.shopify_order_name, rec.sku);
       if (shopifyRefund && shopifyRefund.product_refund !== rec.refund_amount) {

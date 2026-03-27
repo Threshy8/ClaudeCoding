@@ -41,21 +41,43 @@ async function getAccessToken(store, storeUrl, accessToken, clientId, clientSecr
   );
 }
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function shopifyGet(url, accessToken, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await axios.get(url, {
+        headers: {
+          'X-Shopify-Access-Token': accessToken,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (err) {
+      if (err.response?.status === 429 && attempt < retries) {
+        const retryAfter = parseFloat(err.response.headers['retry-after']) || 1;
+        console.log(`[Shopify] Rate limited (429), waiting ${retryAfter}s before retry ${attempt}/${retries}...`);
+        await sleep(retryAfter * 1000);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function fetchAllOrders(storeUrl, accessToken) {
   const base = storeUrl.replace(/\/$/, '');
   const orders = [];
   let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=any&limit=250&created_at_min=2025-01-01T00:00:00Z`;
   console.log('[Shopify Sync] Fetching orders from:', url);
+  let pageCount = 0;
 
   while (url) {
-    const response = await axios.get(url, {
-      headers: {
-        'X-Shopify-Access-Token': accessToken,
-        'Content-Type': 'application/json',
-      },
-    });
+    if (pageCount > 0) await sleep(500); // Rate limit: stay under 2 calls/sec
+    const response = await shopifyGet(url, accessToken);
+    pageCount++;
 
     orders.push(...response.data.orders);
+    console.log(`[Shopify Sync] Page ${pageCount}: fetched ${response.data.orders.length} orders (total: ${orders.length})`);
 
     const linkHeader = response.headers['link'];
     if (linkHeader && linkHeader.includes('rel="next"')) {
