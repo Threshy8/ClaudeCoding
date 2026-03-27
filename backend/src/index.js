@@ -23,18 +23,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'http://localhost:3000',
-  'http://localhost:5173',
-].filter(Boolean);
-app.use(cors({
-  origin: (origin, cb) => {
-    // Allow requests with no origin (server-to-server, health checks)
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    cb(null, false);
-  },
-}));
+app.use(cors({ origin: true }));
 app.use(express.json({ limit: '10mb' }));
 
 // Routes
