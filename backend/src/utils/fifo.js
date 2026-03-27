@@ -202,14 +202,18 @@ async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
     else results.processed += batch.length;
   }
 
-  // 9. Update lot quantity_remaining in DB
+  // 9. Update lot quantity_remaining in DB (batched)
   const lotUpdateEntries = Object.entries(lotUpdates);
-  for (const [lotId, newQty] of lotUpdateEntries) {
-    const { error } = await supabase
-      .from('purchase_order_lines')
-      .update({ quantity_remaining: newQty })
-      .eq('id', lotId);
-    if (error) results.errors.push(`Lot update failed ${lotId}: ${error.message}`);
+  const LOT_BATCH_SIZE = 20;
+  for (let i = 0; i < lotUpdateEntries.length; i += LOT_BATCH_SIZE) {
+    const batch = lotUpdateEntries.slice(i, i + LOT_BATCH_SIZE);
+    const updates = batch.map(([lotId, newQty]) =>
+      supabase.from('purchase_order_lines').update({ quantity_remaining: newQty }).eq('id', lotId)
+    );
+    const results_ = await Promise.all(updates);
+    for (let j = 0; j < results_.length; j++) {
+      if (results_[j].error) results.errors.push(`Lot update failed ${batch[j][0]}: ${results_[j].error.message}`);
+    }
   }
 
   // 10. Update PO statuses (open / partial / closed)
@@ -225,17 +229,24 @@ async function runFifoEngine(store = 'au', startDate = '2026-03-12') {
  * closed = all quantity_remaining == 0
  */
 async function updatePoStatuses() {
-  const { data: pos } = await supabase
-    .from('purchase_orders')
-    .select('id');
-  if (!pos) return;
+  // Fetch all POs and their lines in parallel
+  const [{ data: pos }, { data: allLines }] = await Promise.all([
+    supabase.from('purchase_orders').select('id'),
+    supabase.from('purchase_order_lines').select('po_id, quantity_ordered, quantity_remaining'),
+  ]);
+  if (!pos || !allLines) return;
 
+  // Group lines by po_id in memory
+  const linesByPo = {};
+  for (const line of allLines) {
+    if (!linesByPo[line.po_id]) linesByPo[line.po_id] = [];
+    linesByPo[line.po_id].push(line);
+  }
+
+  // Batch status updates
+  const updates = [];
   for (const po of pos) {
-    const { data: lines } = await supabase
-      .from('purchase_order_lines')
-      .select('quantity_ordered, quantity_remaining')
-      .eq('po_id', po.id);
-
+    const lines = linesByPo[po.id];
     if (!lines || lines.length === 0) continue;
 
     const totalOrdered = lines.reduce((s, l) => s + l.quantity_ordered, 0);
@@ -245,11 +256,10 @@ async function updatePoStatuses() {
     if (totalRemaining === 0) status = 'closed';
     else if (totalRemaining < totalOrdered) status = 'partial';
 
-    await supabase
-      .from('purchase_orders')
-      .update({ status })
-      .eq('id', po.id);
+    updates.push(supabase.from('purchase_orders').update({ status }).eq('id', po.id));
   }
+
+  await Promise.all(updates);
 }
 
 /**
@@ -258,16 +268,17 @@ async function updatePoStatuses() {
  * WARNING: Deletes all existing cogs_entries and re-runs FIFO.
  */
 async function recomputeAllCogs(store = 'au', startDate = '2026-03-12') {
-  // Reset all lot quantities to original ordered quantities
+  // Reset all lot quantities to original ordered quantities (batched)
   const { data: lines } = await supabase
     .from('purchase_order_lines')
     .select('id, quantity_ordered');
 
-  for (const line of (lines || [])) {
-    await supabase
-      .from('purchase_order_lines')
-      .update({ quantity_remaining: line.quantity_ordered })
-      .eq('id', line.id);
+  const RESET_BATCH = 20;
+  for (let i = 0; i < (lines || []).length; i += RESET_BATCH) {
+    const batch = lines.slice(i, i + RESET_BATCH);
+    await Promise.all(batch.map(line =>
+      supabase.from('purchase_order_lines').update({ quantity_remaining: line.quantity_ordered }).eq('id', line.id)
+    ));
   }
 
   // Delete all cogs_entries for this store

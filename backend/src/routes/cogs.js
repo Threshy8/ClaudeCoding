@@ -46,62 +46,30 @@ async function getStockAdjustmentDeltas() {
 
 // periodStart / periodEnd are YYYY-MM-DD strings; periodEnd is exclusive
 async function buildCogsData(periodStart, periodEnd, periodLabel) {
-  // 1. Get all purchases (all time) to compute average costs and total stock purchased
-  const { data: allPurchases, error: purchaseError } = await supabase
-    .from('purchases')
-    .select('sku, product_name, quantity, unit_cost');
+  // Fetch all data in parallel
+  const [
+    { data: allPurchases, error: purchaseError },
+    { data: allSales, error: allSalesError },
+    { data: allRefunds, error: allRefundsError },
+    { data: allRedoReturns },
+    { data: periodSales, error: periodSalesError },
+    { data: periodRefunds, error: periodRefundsError },
+    { data: periodRedoReturns },
+  ] = await Promise.all([
+    supabase.from('purchases').select('sku, product_name, quantity, unit_cost'),
+    supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax'),
+    supabase.from('shopify_refunds').select('sku, quantity_refunded, order_number'),
+    supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name').in('status', ['complete', 'open']),
+    supabase.from('shopify_sales').select('sku, product_name, quantity_sold, sale_price, line_revenue, order_date').gte('order_date', periodStart).lt('order_date', periodEnd).neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax'),
+    supabase.from('shopify_refunds').select('sku, product_name, quantity_refunded, refund_subtotal, order_number, refund_date').gte('refund_date', periodStart).lt('refund_date', periodEnd),
+    supabase.from('redo_returns').select('sku, product_name, quantity_returned, refund_amount, shopify_order_name, return_date').gte('return_date', periodStart).lt('return_date', periodEnd).in('status', ['complete', 'open']),
+  ]);
 
   if (purchaseError) throw new Error(purchaseError.message);
-
-  // 2. Get gross sales (all time) — used with all-time refunds for inventory on-hand
-  const { data: allSales, error: allSalesError } = await supabase
-    .from('shopify_sales')
-    .select('sku, quantity_sold')
-    .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
-
   if (allSalesError) throw new Error(allSalesError.message);
-
-  // 3. Get all refunds (all time) — subtract from gross to get net sold for inventory on-hand
-  const { data: allRefunds, error: allRefundsError } = await supabase
-    .from('shopify_refunds')
-    .select('sku, quantity_refunded, order_number');
-
   if (allRefundsError) throw new Error(allRefundsError.message);
-
-  // 3b. Get all Redo returns (all time) for inventory on-hand — only completed
-  const { data: allRedoReturns } = await supabase
-    .from('redo_returns')
-    .select('sku, quantity_returned, shopify_order_name')
-    .in('status', ['complete', 'open']);
-
-  // 4. Get gross sales for the period (by order_date)
-  const { data: periodSales, error: periodSalesError } = await supabase
-    .from('shopify_sales')
-    .select('sku, product_name, quantity_sold, sale_price, line_revenue, order_date')
-    .gte('order_date', periodStart)
-    .lt('order_date', periodEnd)
-    .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
-
   if (periodSalesError) throw new Error(periodSalesError.message);
-
-  // 5. Get refunds processed in the period (by refund_date, not order_date)
-  //    This matches Shopify's "Net items sold" methodology: returns reduce the period
-  //    in which they happen, regardless of when the original order was placed.
-  const { data: periodRefunds, error: periodRefundsError } = await supabase
-    .from('shopify_refunds')
-    .select('sku, product_name, quantity_refunded, refund_subtotal, order_number, refund_date')
-    .gte('refund_date', periodStart)
-    .lt('refund_date', periodEnd);
-
   if (periodRefundsError) throw new Error(periodRefundsError.message);
-
-  // 5b. Get Redo returns processed in the period (by return_date) — only completed
-  const { data: periodRedoReturns } = await supabase
-    .from('redo_returns')
-    .select('sku, product_name, quantity_returned, refund_amount, shopify_order_name, return_date')
-    .gte('return_date', periodStart)
-    .lt('return_date', periodEnd)
-    .in('status', ['complete', 'open']);
 
   // --- Build average cost map per SKU ---
   // totalCostCents accumulates in integer cents to avoid float drift
@@ -164,19 +132,10 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   for (const r of periodRefunds) {
     if (r.order_number) periodRefundOrderSkuSet.add(`${r.order_number}|${r.sku}`);
   }
-  console.log(`[buildCogsData] period=${periodLabel} periodRedoReturns fetched: ${(periodRedoReturns || []).length}`);
-  console.log(`[buildCogsData] periodRefundOrderSkuSet (de-dup):`, [...periodRefundOrderSkuSet]);
   // Merge Redo returns into period refund map — skip if already in shopify_refunds
-  let redoSkipped = 0, redoAdded = 0;
   for (const r of (periodRedoReturns || [])) {
     const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
-    if (periodRefundOrderSkuSet.has(`${orderNum}|${r.sku}`)) {
-      console.log(`[buildCogsData] SKIPPED redo: order=${orderNum} sku=${r.sku} (already in shopify_refunds)`);
-      redoSkipped++;
-      continue;
-    }
-    console.log(`[buildCogsData] ADDED redo: order=${orderNum} sku=${r.sku} qty=${r.quantity_returned} amt=${r.refund_amount} return_date=${r.return_date}`);
-    redoAdded++;
+    if (periodRefundOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
     const sku = r.sku;
     if (!periodRefundMap[sku]) {
       periodRefundMap[sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0, details: [] };
@@ -191,7 +150,6 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       source: 'redo',
     });
   }
-  console.log(`[buildCogsData] period=${periodLabel} redo summary: ${redoAdded} added, ${redoSkipped} skipped (de-duped)`);
 
   // --- Build period gross sales summary per SKU ---
   // grossRevenueCents accumulates in integer cents
@@ -398,36 +356,6 @@ router.get('/summary', async (req, res) => {
     console.error('COGS summary error:', err.message);
     res.status(500).json({ error: err.message });
   }
-});
-
-// GET /api/cogs/debug — shows raw row counts from both sales/refunds tables
-// Useful for diagnosing sync issues; safe to call anytime
-router.get('/debug', async (req, res) => {
-  const store = req.query.store || 'au';
-
-  const [salesRes, refundsRes, recentRefundsRes] = await Promise.all([
-    supabase.from('shopify_sales').select('sku, quantity_sold, order_date', { count: 'exact' }).eq('store', store),
-    supabase.from('shopify_refunds').select('sku, quantity_refunded, refund_date', { count: 'exact' }).eq('store', store),
-    supabase.from('shopify_refunds')
-      .select('sku, quantity_refunded, refund_date, shopify_refund_id')
-      .eq('store', store)
-      .order('refund_date', { ascending: false })
-      .limit(20),
-  ]);
-
-  res.json({
-    store,
-    shopify_sales: {
-      total_rows: salesRes.count,
-      error: salesRes.error?.message || null,
-    },
-    shopify_refunds: {
-      total_rows: refundsRes.count,
-      error: refundsRes.error?.message || null,
-      recent_20: recentRefundsRes.data || [],
-      recent_error: recentRefundsRes.error?.message || null,
-    },
-  });
 });
 
 // ── GET /api/cogs/orders ──────────────────────────────────────────────────────
@@ -654,11 +582,18 @@ router.get('/entries/by-sku', async (req, res) => {
       skuMap[e.sku].sccHandlingCents += toCents(e.unit_scc_handling) * qty;
     }
 
-    // Get inventory on-hand from WAC data (purchases − all-time net sold)
-    const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
-    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
-    const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded, order_number');
-    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name').in('status', ['complete', 'open']);
+    // Get inventory on-hand from WAC data (purchases − all-time net sold) — parallel
+    const [
+      { data: allPurchases },
+      { data: allSales },
+      { data: allRefunds },
+      { data: allRedoReturns },
+    ] = await Promise.all([
+      supabase.from('purchases').select('sku, product_name, quantity, unit_cost'),
+      supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax'),
+      supabase.from('shopify_refunds').select('sku, quantity_refunded, order_number'),
+      supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name').in('status', ['complete', 'open']),
+    ]);
 
     // De-dup set: skip Redo returns where shopify_refunds already has the same order+sku
     const refundOrderSkuSet = new Set();
@@ -929,64 +864,20 @@ router.get('/entries/by-order', async (req, res) => {
   }
 });
 
-// ── GET /api/inventory/debug ─────────────────────────────────────────────────
-// Lightweight diagnostic: tests each query the summary endpoint uses
-router.get('/inventory/debug', async (req, res) => {
-  const store = req.query.store || 'au';
-  const results = {};
-  try {
-    const { count: c1, error: e1 } = await supabase.from('purchase_order_lines').select('*', { count: 'exact', head: true }).gt('quantity_remaining', 0);
-    results.purchase_order_lines = e1 ? `ERROR: ${e1.message}` : `ok (${c1} rows)`;
-  } catch (e) { results.purchase_order_lines = `CRASH: ${e.message}`; }
-  try {
-    const { count: c2, error: e2 } = await supabase.from('stock_adjustments').select('*', { count: 'exact', head: true });
-    results.stock_adjustments = e2 ? `ERROR: ${e2.message}` : `ok (${c2} rows)`;
-  } catch (e) { results.stock_adjustments = `CRASH: ${e.message}`; }
-  try {
-    const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const { count: c3, error: e3 } = await supabase.from('shopify_sales').select('*', { count: 'exact', head: true }).gte('order_date', monthStart).eq('store', store);
-    results.shopify_sales_month = e3 ? `ERROR: ${e3.message}` : `ok (${c3} rows)`;
-  } catch (e) { results.shopify_sales_month = `CRASH: ${e.message}`; }
-  try {
-    const thirtyAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString().slice(0, 10);
-    const { count: c4, error: e4 } = await supabase.from('shopify_sales').select('*', { count: 'exact', head: true }).gte('order_date', thirtyAgo).eq('store', store);
-    results.shopify_sales_30d = e4 ? `ERROR: ${e4.message}` : `ok (${c4} rows)`;
-  } catch (e) { results.shopify_sales_30d = `CRASH: ${e.message}`; }
-
-  // Now try the actual summary query step by step
-  try {
-    const { data: lots, error: lotsErr } = await supabase
-      .from('purchase_order_lines')
-      .select('sku, product_name, unit_cost, quantity_remaining, po_number')
-      .gt('quantity_remaining', 0);
-    results.lots_fetch = lotsErr ? `ERROR: ${lotsErr.message}` : `ok (${lots?.length} rows)`;
-  } catch (e) { results.lots_fetch = `CRASH: ${e.message}`; }
-
-  res.json(results);
-});
-
 // ── GET /api/inventory/summary ───────────────────────────────────────────────
 // Returns current stock levels per SKU with values and sales velocity
 router.get('/inventory/summary', async (req, res) => {
   const store = req.query.store || 'au';
-  console.log('[inventory/summary] start, store=', store);
 
   try {
-    // 1. Get all lots with remaining stock
-    console.log('[inventory/summary] querying purchase_order_lines...');
-    const { data: lots, error: lotsErr } = await supabase
-      .from('purchase_order_lines')
-      .select('sku, product_name, unit_cost, quantity_remaining, po_number')
-      .gt('quantity_remaining', 0);
-    if (lotsErr) { console.error('[inventory/summary] lotsErr:', lotsErr.message); return res.status(500).json({ error: lotsErr.message }); }
-    console.log('[inventory/summary] purchase_order_lines rows:', lots?.length);
+    // 1. Get all lots with remaining stock + stock adjustments in parallel
+    const [lotsResult, adjDeltas] = await Promise.all([
+      supabase.from('purchase_order_lines').select('sku, product_name, unit_cost, quantity_remaining, po_number').gt('quantity_remaining', 0),
+      getStockAdjustmentDeltas(),
+    ]);
+    const { data: lots, error: lotsErr } = lotsResult;
+    if (lotsErr) return res.status(500).json({ error: lotsErr.message });
     if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
-
-    // 1b. Get stock adjustment deltas (physical count corrections)
-    console.log('[inventory/summary] querying stock_adjustments...');
-    const adjDeltas = await getStockAdjustmentDeltas();
-    console.log('[inventory/summary] adjDeltas keys:', Object.keys(adjDeltas).length);
 
     // Group by SKU (accumulate cost in cents)
     const skuMap = {};
@@ -1009,31 +900,20 @@ router.get('/inventory/summary', async (req, res) => {
       }
     }
 
-    // 2. Get sales this calendar month
-    console.log('[inventory/summary] querying shopify_sales (month)...');
+    // 2. Get month sales and 30d prices in parallel
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const { data: monthSales } = await supabase
-      .from('shopify_sales')
-      .select('sku, quantity_sold')
-      .gte('order_date', monthStart)
-      .eq('store', store)
-      .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const [{ data: monthSales }, { data: recentSales }] = await Promise.all([
+      supabase.from('shopify_sales').select('sku, quantity_sold').gte('order_date', monthStart).eq('store', store).neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax'),
+      supabase.from('shopify_sales').select('sku, quantity_sold, sale_price').gte('order_date', thirtyDaysAgo).eq('store', store).neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax'),
+    ]);
 
     const monthSoldMap = {};
     for (const s of (monthSales || [])) {
       monthSoldMap[s.sku] = (monthSoldMap[s.sku] || 0) + s.quantity_sold;
     }
-
-    // 3. Get avg sale price per SKU (last 30 days, in cents)
-    console.log('[inventory/summary] querying shopify_sales (30d prices)...');
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const { data: recentSales } = await supabase
-      .from('shopify_sales')
-      .select('sku, quantity_sold, sale_price')
-      .gte('order_date', thirtyDaysAgo)
-      .eq('store', store)
-      .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
     const salePriceMap = {}; // { sku: { totalRevCents, totalQty } }
     for (const s of (recentSales || [])) {
@@ -1043,8 +923,7 @@ router.get('/inventory/summary', async (req, res) => {
       salePriceMap[s.sku].totalQty += qty;
     }
 
-    // 4. Build response
-    console.log('[inventory/summary] building response...');
+    // 3. Build response
     const skus = Object.values(skuMap).map(s => {
       const avgUnitCostCents = s.quantity_remaining > 0 ? s.totalCostCents / s.quantity_remaining : 0;
       const sp = salePriceMap[s.sku];

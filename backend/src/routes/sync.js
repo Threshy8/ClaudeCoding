@@ -1,83 +1,44 @@
 const express = require('express');
 const router = express.Router();
-const axios = require('axios');
 const supabase = require('../db/supabase');
 const { runFifoEngine } = require('../utils/fifo');
-
-// Exchange client credentials for an OAuth access token (24hr expiry, must refresh)
-async function getOAuthToken(storeUrl, clientId, clientSecret) {
-  const base = storeUrl.replace(/\/$/, '');
-  const tokenUrl = `${base}/admin/oauth/access_token`;
-  const params = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: 'client_credentials',
-  });
-
-  const response = await axios.post(tokenUrl, params.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    maxRedirects: 0,
-    validateStatus: (status) => status >= 200 && status < 300,
-  });
-
-  const data = response.data;
-  if (typeof data === 'string' && data.trim().toLowerCase().startsWith('<!')) {
-    throw new Error(
-      'Shopify returned HTML instead of JSON. Check: 1) Store URL is correct (e.g. https://your-store.myshopify.com). ' +
-        '2) App is installed on the store. 3) Store is active (not suspended/expired).'
-    );
-  }
-  if (!data || !data.access_token) {
-    throw new Error(data?.errors || 'No access_token in Shopify response');
-  }
-  return data.access_token;
-}
+const { sleep, shopifyGet, getShopifyAccessToken } = require('../utils/shopify');
+const { toStoreDate } = require('../utils/date');
 
 async function getAccessToken(store, storeUrl, accessToken, clientId, clientSecret) {
   if (accessToken) return accessToken;
-  if (clientId && clientSecret) return getOAuthToken(storeUrl, clientId, clientSecret);
+  if (clientId && clientSecret) {
+    // For multi-store support, override env temporarily
+    const origUrl = process.env.SHOPIFY_STORE_URL;
+    const origId = process.env.SHOPIFY_CLIENT_ID;
+    const origSecret = process.env.SHOPIFY_CLIENT_SECRET;
+    process.env.SHOPIFY_STORE_URL = storeUrl;
+    process.env.SHOPIFY_CLIENT_ID = clientId;
+    process.env.SHOPIFY_CLIENT_SECRET = clientSecret;
+    try {
+      return await getShopifyAccessToken();
+    } finally {
+      process.env.SHOPIFY_STORE_URL = origUrl;
+      process.env.SHOPIFY_CLIENT_ID = origId;
+      process.env.SHOPIFY_CLIENT_SECRET = origSecret;
+    }
+  }
   throw new Error(
     `Shopify auth not configured for ${store}. Set either SHOPIFY_ACCESS_TOKEN or SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET in .env`
   );
-}
-
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-async function shopifyGet(url, accessToken, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      return await axios.get(url, {
-        headers: {
-          'X-Shopify-Access-Token': accessToken,
-          'Content-Type': 'application/json',
-        },
-      });
-    } catch (err) {
-      if (err.response?.status === 429 && attempt < retries) {
-        const retryAfter = parseFloat(err.response.headers['retry-after']) || 1;
-        console.log(`[Shopify] Rate limited (429), waiting ${retryAfter}s before retry ${attempt}/${retries}...`);
-        await sleep(retryAfter * 1000);
-        continue;
-      }
-      throw err;
-    }
-  }
 }
 
 async function fetchAllOrders(storeUrl, accessToken) {
   const base = storeUrl.replace(/\/$/, '');
   const orders = [];
   let url = `${base}/admin/api/2024-01/orders.json?status=any&financial_status=any&limit=250&created_at_min=2025-01-01T00:00:00Z`;
-  console.log('[Shopify Sync] Fetching orders from:', url);
   let pageCount = 0;
 
   while (url) {
-    if (pageCount > 0) await sleep(500); // Rate limit: stay under 2 calls/sec
+    if (pageCount > 0) await sleep(500);
     const response = await shopifyGet(url, accessToken);
     pageCount++;
-
     orders.push(...response.data.orders);
-    console.log(`[Shopify Sync] Page ${pageCount}: fetched ${response.data.orders.length} orders (total: ${orders.length})`);
 
     const linkHeader = response.headers['link'];
     if (linkHeader && linkHeader.includes('rel="next"')) {
@@ -88,61 +49,9 @@ async function fetchAllOrders(storeUrl, accessToken) {
     }
   }
 
+  console.log(`[Shopify Sync] Fetched ${orders.length} orders in ${pageCount} pages`);
   return orders;
 }
-
-// GET /api/sync/shopify/test
-router.get('/shopify/test', async (req, res) => {
-  const storeUrl = process.env.SHOPIFY_STORE_URL;
-  const clientId = process.env.SHOPIFY_CLIENT_ID;
-  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
-
-  if (!storeUrl || !clientId || !clientSecret) {
-    return res.json({
-      ok: false,
-      error: 'Missing SHOPIFY_STORE_URL, SHOPIFY_CLIENT_ID, or SHOPIFY_CLIENT_SECRET',
-    });
-  }
-
-  const tokenUrl = `${storeUrl.replace(/\/$/, '')}/admin/oauth/access_token`;
-  try {
-    const params = new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      grant_type: 'client_credentials',
-    });
-    const response = await axios.post(tokenUrl, params.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      maxRedirects: 0,
-      validateStatus: () => true,
-    });
-
-    const data = response.data;
-    const contentType = response.headers['content-type'] || '';
-    const isHtml = typeof data === 'string' && data.trim().toLowerCase().startsWith('<!');
-
-    res.json({
-      status: response.status,
-      contentType,
-      isHtml,
-      bodyPreview: typeof data === 'string'
-        ? data.slice(0, 120) + (data.length > 120 ? '...' : '')
-        : JSON.stringify(data).slice(0, 200),
-      hint: isHtml
-        ? 'HTML response = app likely not installed on store.'
-        : response.status === 200 && data?.access_token
-          ? 'Token obtained successfully.'
-          : `Unexpected response (status ${response.status}). Check credentials.`,
-    });
-  } catch (err) {
-    res.json({
-      ok: false,
-      error: err.message,
-      status: err.response?.status,
-      hint: err.code === 'ENOTFOUND' ? 'Store URL may be wrong — check SHOPIFY_STORE_URL.' : '',
-    });
-  }
-});
 
 // POST /api/sync/shopify — trigger a Shopify sync + FIFO engine
 router.post('/shopify', async (req, res) => {
@@ -175,15 +84,6 @@ router.post('/shopify', async (req, res) => {
     const token = await getAccessToken(store, storeUrl, accessToken, clientId, clientSecret);
     const orders = await fetchAllOrders(storeUrl, token);
 
-    // Default to Australia/Sydney for AU store if not explicitly set
-    const tz = process.env.SHOPIFY_STORE_TIMEZONE || (store === 'au' ? 'Australia/Sydney' : undefined);
-
-    function toStoreDate(isoString) {
-      if (!isoString) return null;
-      const d = new Date(isoString);
-      return tz ? d.toLocaleDateString('en-CA', { timeZone: tz }) : isoString.split('T')[0];
-    }
-
     // ── Pass 1: gross sales records ───────────────────────────────────────────
     const salesRecords = [];
 
@@ -212,7 +112,6 @@ router.post('/shopify', async (req, res) => {
         if (qty <= 0) continue;
         const sku = item.sku || `NO-SKU-${item.product_id}`;
 
-        // Subtract discount allocations to get net line revenue
         const discountTotal = (item.discount_allocations || [])
           .reduce((sum, da) => sum + (parseFloat(da.amount) || 0), 0);
         const lineRevenue = (parseFloat(item.price) * qty) - discountTotal;
@@ -264,7 +163,6 @@ router.post('/shopify', async (req, res) => {
           line_revenue:  shippingRounded,
         });
       }
-
     }
 
     // ── Pass 2: refund records ────────────────────────────────────────────────
@@ -273,8 +171,7 @@ router.post('/shopify', async (req, res) => {
     for (const order of orders) {
       if (order.test) continue;
       // NOTE: Do NOT skip cancelled orders here — cancelled orders can still
-      // have refunds that Shopify counts in "Returns". Pass 1 correctly skips
-      // cancelled orders for gross sales, so the net effect is correct.
+      // have refunds that Shopify counts in "Returns".
       if (order.currency !== 'AUD') continue;
 
       const orderDate = toStoreDate(order.created_at);
@@ -339,12 +236,8 @@ router.post('/shopify', async (req, res) => {
     }
 
     // ── Persist sales + refunds ───────────────────────────────────────────────
-    // Note: Redo-processed returns are handled separately via the Redo API
-    // integration (/api/sync/redo) and stored in the redo_returns table.
     await supabase.from('shopify_sales').delete().eq('store', store);
     await supabase.from('shopify_refunds').delete().eq('store', store);
-
-    // Also clear cogs_entries so FIFO engine rewrites them fresh
     await supabase.from('cogs_entries').delete().eq('store', store);
 
     let inserted = 0;
