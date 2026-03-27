@@ -54,3 +54,11 @@ alter table fulfillment_line_items add constraint fulfillment_line_items_categor
   check (category in ('inbound', 'outbound', 'delivery', 'other'));
 
 alter table fulfillment_line_items add column if not exists variable_type text;
+
+-- Add packaging category + supplier column + sku_mapping
+alter table fulfillment_line_items drop constraint if exists fulfillment_line_items_category_check;
+alter table fulfillment_line_items add constraint fulfillment_line_items_category_check
+  check (category in ('inbound', 'outbound', 'delivery', 'packaging', 'other'));
+
+alter table fulfillment_line_items add column if not exists sku_mapping text;
+alter table fulfillment_invoices add column if not exists supplier text default 'scc';

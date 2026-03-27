@@ -2,8 +2,10 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
 import { BASE_URL, apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
-const CATEGORY_COLOR  = { inbound: '#3b82f6', outbound: '#f59e0b', delivery: '#06b6d4', other: '#8b5cf6' };
-const CATEGORY_LABEL  = { inbound: 'Inbound',  outbound: 'Outbound', delivery: 'Delivery', other: 'Other'  };
+const CATEGORY_COLOR  = { inbound: '#3b82f6', outbound: '#f59e0b', delivery: '#06b6d4', packaging: '#64748b', other: '#8b5cf6' };
+const CATEGORY_LABEL  = { inbound: 'Inbound',  outbound: 'Outbound', delivery: 'Delivery', packaging: 'Packaging', other: 'Other'  };
+const SUPPLIER_COLOR  = { scc: '#d97706', packaging: '#64748b' };
+const SUPPLIER_LABEL  = { scc: 'SCC', packaging: 'PACKAGING' };
 const COST_TYPE_COLOR = { variable: '#10b981', fixed: '#6b7280' };
 const COST_TYPE_LABEL = { variable: 'Variable', fixed: 'Fixed' };
 
@@ -220,7 +222,7 @@ function InvoicesView({ dateRange }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
           {[
             { label: 'Total 3PL Cost', value: mc(_fmt(summary.total)), sub: `${mc(_fmt(Math.round(summary.total * 110) / 100))} inc GST · ${dateRange?.label || 'Period'}`, color: 'var(--text-primary)', bg: 'var(--bg-card)' },
-            { label: 'Fixed Costs', value: mc(_fmt(summary.fixed)), sub: 'Storage, receiving, labour', color: COST_TYPE_COLOR.fixed, bg: `${COST_TYPE_COLOR.fixed}0f` },
+            { label: 'Fixed Costs', value: mc(_fmt(summary.fixed)), sub: summary.packaging > 0 ? `Incl. ${mc(_fmt(summary.packaging))} packaging` : 'Storage, receiving, labour', color: COST_TYPE_COLOR.fixed, bg: `${COST_TYPE_COLOR.fixed}0f` },
             { label: 'Variable Costs', value: mc(_fmt(summary.variable)), sub: 'Pick/pack, dispatch per order', color: COST_TYPE_COLOR.variable, bg: `${COST_TYPE_COLOR.variable}0f` },
             { label: 'Variable / Unit', value: summary.cost_per_unit > 0 ? mc(_fmt(summary.cost_per_unit)) : '—', sub: summary.units_shipped > 0 ? `${mn(summary.units_shipped)} units shipped` : 'No units data', color: 'var(--text-primary)', bg: 'var(--bg-card)' },
           ].map(({ label, value, sub, color, bg }) => (
@@ -318,6 +320,21 @@ function InvoicesView({ dateRange }) {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 500 }}>Supplier:</label>
+                      <select
+                        value={inv.supplier || 'scc'}
+                        onChange={e => updateParsedInvoice(activeTab, 'supplier', e.target.value)}
+                        style={{
+                          fontSize: 12, padding: '4px 8px', borderRadius: 6,
+                          border: '1px solid var(--border)', background: 'var(--bg-card)',
+                          color: 'var(--text-primary)',
+                        }}
+                      >
+                        <option value="scc">SCC</option>
+                        <option value="packaging">Packaging</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 500 }}>Due:</label>
                       <input
                         type="date"
@@ -349,6 +366,7 @@ function InvoicesView({ dateRange }) {
                         <th className="text-right">Rate</th>
                         <th className="text-right">Ex GST</th>
                         <th className="text-right">GST</th>
+                        <th>SKU Mapping</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -357,7 +375,7 @@ function InvoicesView({ dateRange }) {
                           <td style={{ fontSize: 13 }}>{li.description}</td>
                           <td>
                             <EditableSelect value={li.category} onChange={v => updateParsedLine(activeTab, idx, 'category', v)}
-                              options={[['inbound','Inbound'],['outbound','Outbound'],['delivery','Delivery'],['other','Other']]}
+                              options={[['inbound','Inbound'],['outbound','Outbound'],['delivery','Delivery'],['packaging','Packaging'],['other','Other']]}
                               color={CATEGORY_COLOR[li.category]} />
                           </td>
                           <td>
@@ -380,6 +398,19 @@ function InvoicesView({ dateRange }) {
                           <td className="text-right text-muted" style={{ fontSize: 13 }}>{li.unit_rate ? mc(_fmt(li.unit_rate)) : '—'}</td>
                           <td className="text-right" style={{ fontSize: 13, fontWeight: 500 }}>{mc(_fmt(li.amount_ex_gst))}</td>
                           <td className="text-right text-muted" style={{ fontSize: 13 }}>{mc(_fmt(li.gst))}</td>
+                          <td>
+                            <input
+                              type="text"
+                              value={li.sku_mapping || ''}
+                              onChange={e => updateParsedLine(activeTab, idx, 'sku_mapping', e.target.value || null)}
+                              placeholder="e.g. Carina, Cyclops"
+                              style={{
+                                fontSize: 11, padding: '3px 6px', borderRadius: 4, width: 120,
+                                border: '1px solid var(--border)', background: 'var(--bg-card)',
+                                color: 'var(--text-primary)',
+                              }}
+                            />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -392,6 +423,7 @@ function InvoicesView({ dateRange }) {
                         <td className="text-right" style={{ fontWeight: 600, fontSize: 13, paddingTop: 10 }}>
                           {mc(_fmt((inv.line_items || []).reduce((s, li) => s + (parseFloat(li.gst) || 0), 0)))}
                         </td>
+                        <td></td>
                       </tr>
                     </tfoot>
                   </table>
@@ -399,7 +431,7 @@ function InvoicesView({ dateRange }) {
 
                 {/* Category + type badges */}
                 <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
-                  {[['inbound','inbound',CATEGORY_COLOR],['outbound','outbound',CATEGORY_COLOR],['delivery','delivery',CATEGORY_COLOR],['variable','variable',COST_TYPE_COLOR],['fixed','fixed',COST_TYPE_COLOR]].map(([key, field, colorMap]) => {
+                  {[['inbound','inbound',CATEGORY_COLOR],['outbound','outbound',CATEGORY_COLOR],['delivery','delivery',CATEGORY_COLOR],['packaging','packaging',CATEGORY_COLOR],['variable','variable',COST_TYPE_COLOR],['fixed','fixed',COST_TYPE_COLOR]].map(([key, field, colorMap]) => {
                     const total = (inv.line_items || [])
                       .filter(li => li.category === key || li.cost_type === key)
                       .reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
@@ -446,6 +478,16 @@ function InvoicesView({ dateRange }) {
                       <tr style={{ cursor: 'pointer' }} onClick={() => toggleExpand(inv.id)}>
                         <td className="text-muted">{fmtDate(inv.invoice_date)}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
+                          {(() => {
+                            const sup = inv.supplier || 'scc';
+                            const supColor = SUPPLIER_COLOR[sup] || SUPPLIER_COLOR.scc;
+                            const supLabel = SUPPLIER_LABEL[sup] || sup.toUpperCase();
+                            return (
+                              <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 4, background: `${supColor}18`, color: supColor, fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', marginRight: 8, verticalAlign: 'middle' }}>
+                                {supLabel}
+                              </span>
+                            );
+                          })()}
                           <span style={{ fontWeight: 500 }}>{inv.period_description || '—'}</span>
                           {inv.invoice_ref && <span className="text-muted" style={{ fontSize: 12, marginLeft: 8 }}>{inv.invoice_ref}</span>}
                         </td>
@@ -929,12 +971,12 @@ function EditableSelect({ value, onChange, options, color }) {
 function LineItemsTable({ items }) {
   const { mc, mn } = useDemoMask();
   if (!items.length) return <div className="text-muted" style={{ fontSize: 13 }}>No line items.</div>;
-  const grouped = { inbound: [], outbound: [], delivery: [], other: [] };
+  const grouped = { inbound: [], outbound: [], delivery: [], packaging: [], other: [] };
   for (const li of items) (grouped[li.category] || grouped.other).push(li);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {['inbound', 'outbound', 'delivery', 'other'].map(cat => {
+      {['inbound', 'outbound', 'delivery', 'packaging', 'other'].map(cat => {
         if (!grouped[cat].length) return null;
         const catTotal = grouped[cat].reduce((s, li) => s + parseFloat(li.amount_ex_gst || 0), 0);
         return (

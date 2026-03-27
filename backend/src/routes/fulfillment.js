@@ -34,7 +34,7 @@ router.get('/summary', async (req, res) => {
 
   let query = supabase
     .from('fulfillment_invoices')
-    .select('id, invoice_date, invoice_ref, period_description, total_ex_gst, total_inc_gst, units_shipped, payment_status, paid_date');
+    .select('id, invoice_date, invoice_ref, period_description, total_ex_gst, total_inc_gst, units_shipped, payment_status, paid_date, supplier');
   if (start_date) query = query.gte('invoice_date', start_date);
   if (end_date)   query = query.lte('invoice_date', end_date);
 
@@ -55,17 +55,18 @@ router.get('/summary', async (req, res) => {
     .in('invoice_id', invoiceIds);
   if (liError) return res.status(500).json({ error: liError.message });
 
-  const totals = { inbound: 0, outbound: 0, delivery: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0 };
+  const totals = { inbound: 0, outbound: 0, delivery: 0, packaging: 0, other: 0, total: 0, fixed: 0, variable: 0, units_shipped: 0 };
 
   // Per-invoice fixed/variable breakdown
   const perInvoice = {};
   for (const li of (lineItems || [])) {
     const amt = parseFloat(li.amount_ex_gst) || 0;
     totals.total += amt;
-    if (li.category === 'inbound')        totals.inbound  += amt;
-    else if (li.category === 'outbound') totals.outbound += amt;
-    else if (li.category === 'delivery') totals.delivery += amt;
-    else                                  totals.other    += amt;
+    if (li.category === 'inbound')         totals.inbound   += amt;
+    else if (li.category === 'outbound')  totals.outbound  += amt;
+    else if (li.category === 'delivery')  totals.delivery  += amt;
+    else if (li.category === 'packaging') totals.packaging += amt;
+    else                                   totals.other     += amt;
     if (li.cost_type === 'fixed')        totals.fixed    += amt;
     else                                  totals.variable += amt;
 
@@ -86,7 +87,7 @@ router.get('/summary', async (req, res) => {
     ? Math.round((totals.variable / totals.units_shipped) * 100) / 100
     : 0;
 
-  for (const k of ['inbound', 'outbound', 'delivery', 'other', 'total', 'fixed', 'variable'])
+  for (const k of ['inbound', 'outbound', 'delivery', 'packaging', 'other', 'total', 'fixed', 'variable'])
     totals[k] = Math.round(totals[k] * 100) / 100;
 
   res.json({ invoices, totals });
@@ -215,6 +216,12 @@ function autoClassifyLineItem(li) {
   if ((desc.includes('PICK') && desc.includes('PACK')) || desc.includes('PER UNIT')) {
     return { ...li, category: 'outbound', cost_type: 'variable', variable_type: 'per_unit' };
   }
+  // Packaging — boxes, cartons, mailers, tape, bubble wrap etc.
+  if (desc.includes('BOX') || desc.includes('CARTON') || desc.includes('BX') ||
+      desc.includes('RSC') || desc.includes('MAILER') || desc.includes('BUBBLE') ||
+      desc.includes('TAPE') || desc.includes('WRAP')) {
+    return { ...li, category: 'packaging', cost_type: 'fixed', variable_type: null };
+  }
   // Inbound fixed
   if (desc.includes('RECEIV') || desc.includes('PUT AWAY') || desc.includes('STORAGE') ||
       desc.includes('PALLET WRAPPING') || desc.includes('GENERAL LABOUR') || desc.includes('PACKAGING')) {
@@ -222,6 +229,8 @@ function autoClassifyLineItem(li) {
   }
   // Delivery — variable per_order (lump sum divided across orders)
   if (desc.includes('DELIVERY') || desc.includes('FREIGHT')) {
+    // If already classified as packaging (e.g. freight on a packaging invoice), keep packaging
+    if (li.category === 'packaging') return { ...li, cost_type: 'fixed', variable_type: null };
     return { ...li, category: 'delivery', cost_type: 'variable', variable_type: 'per_order' };
   }
   return li;
@@ -245,10 +254,11 @@ Extract all charge line items and return ONLY valid JSON (no markdown, no commen
 For each line item assign THREE classifications:
 
 1. "category":
-   - "inbound"  -> receiving stock, put away, pallet storage, admin order processing receiving, inbound freight, packaging materials for receiving
-   - "outbound" -> pick/pack, admin order processing despatch, pack label dispatch, pick pack ship per unit
-   - "delivery" -> ANY delivery or freight charge for sending orders to customers. Examples: "DELIVERY CHARGE", "freight charges", "shipping charges". This is the total cost of shipping all orders that week.
-   - "other"    -> general labour, miscellaneous, pallet wrapping
+   - "inbound"   -> receiving stock, put away, pallet storage, admin order processing receiving, inbound freight
+   - "outbound"  -> pick/pack, admin order processing despatch, pack label dispatch, pick pack ship per unit
+   - "delivery"  -> ANY delivery or freight charge for sending orders to customers. Examples: "DELIVERY CHARGE", "freight charges", "shipping charges". This is the total cost of shipping all orders that week.
+   - "packaging" -> boxes, cartons, mailers, bubble wrap, tape, packaging materials. Examples: "BX200B RSC Carton", "Mailer Box", "Bubble Wrap Roll", "Packing Tape". Also any freight charges on a packaging-only invoice.
+   - "other"     -> general labour, miscellaneous, pallet wrapping
 
 2. "cost_type":
    - "variable" -> scales with number of orders/units. Examples: pick & pack per unit, pack label dispatch per order, admin order processing despatch per order, pick pack ship per unit, delivery/freight charges (scales with order volume)
@@ -276,7 +286,7 @@ Return this exact JSON structure:
   "line_items": [
     {
       "description": "exact description from invoice",
-      "category": "inbound|outbound|delivery|other",
+      "category": "inbound|outbound|delivery|packaging|other",
       "cost_type": "variable|fixed",
       "variable_type": "per_order|per_unit|null",
       "quantity": number or null,
@@ -349,7 +359,7 @@ Always extract "due_date" from payment terms like "Due 14-Mar-26" or "NET 14 DAY
 
 // ── POST /api/fulfillment/invoices ────────────────────────────────────────────
 router.post('/invoices', async (req, res) => {
-  const { invoice_ref, invoice_date, due_date, period_description, units_shipped, orders_dispatched, line_items } = req.body;
+  const { invoice_ref, invoice_date, due_date, period_description, units_shipped, orders_dispatched, supplier, line_items } = req.body;
 
   if (!invoice_date || !line_items || line_items.length === 0)
     return res.status(400).json({ error: 'invoice_date and line_items are required' });
@@ -367,6 +377,7 @@ router.post('/invoices', async (req, res) => {
       period_description: period_description || null,
       units_shipped:      units_shipped || null,
       orders_dispatched:  orders_dispatched || null,
+      supplier:           supplier || 'scc',
       total_ex_gst:       Math.round(totalExGst  * 100) / 100,
       total_gst:          Math.round(totalGst    * 100) / 100,
       total_inc_gst:      Math.round(totalIncGst * 100) / 100,
@@ -386,6 +397,7 @@ router.post('/invoices', async (req, res) => {
     unit_rate:      li.unit_rate || null,
     amount_ex_gst:  parseFloat(li.amount_ex_gst) || 0,
     gst:            parseFloat(li.gst) || 0,
+    sku_mapping:    li.sku_mapping || null,
   }));
 
   const { error: liError } = await supabase.from('fulfillment_line_items').insert(rows);
