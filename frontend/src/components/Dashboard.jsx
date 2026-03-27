@@ -191,11 +191,12 @@ export default function Dashboard({ dateRange }) {
   const productGroups = groupByProduct(rows);
 
   const grossSales = skuData.gross_sales || 0;
+  const totalDiscounts = skuData.total_discounts || 0;
   const totalReturns = skuData.total_returns || 0;
   const shippingRevenue = skuData.shipping_revenue || 0;
   const redoFees = skuData.redo_fees || 0;
   const totalCollected = skuData.total_collected || 0;
-  const netSales = skuData.net_sales || (grossSales - totalReturns);
+  const netSales = skuData.net_sales || (grossSales - totalDiscounts - totalReturns);
   const totalCogs = rows.reduce((s, r) => s + (r.cogs || 0), 0);
   const shippingCosts = freight?.total_cost || 0;
   const netProductRevenue = netSales;
@@ -259,12 +260,22 @@ export default function Dashboard({ dateRange }) {
             <span className="sb-label">Gross Sales</span>
             <span className="sb-value">{mc(_fmt(grossSales))}</span>
           </div>
+          {totalDiscounts > 0 && (
+            <div className="sb-row sb-negative">
+              <span className="sb-label">Discounts</span>
+              <span className="sb-value">−{mc(_fmt(totalDiscounts))}</span>
+            </div>
+          )}
           {totalReturns > 0 && (
             <div className="sb-row sb-negative">
               <span className="sb-label">Returns</span>
               <span className="sb-value">−{mc(_fmt(totalReturns))}</span>
             </div>
           )}
+          <div className="sb-row sb-subtotal">
+            <span className="sb-label">Net Sales</span>
+            <span className="sb-value">{mc(_fmt(netSales))}</span>
+          </div>
           {shippingRevenue > 0 && (
             <div className="sb-row">
               <span className="sb-label">Shipping Charges</span>
