@@ -30,8 +30,10 @@ const allowedOrigins = [
 ].filter(Boolean);
 app.use(cors({
   origin: (origin, cb) => {
-    // Allow requests with no origin (server-to-server, health checks)
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    // Allow any *.up.railway.app subdomain
+    if (/\.up\.railway\.app$/.test(new URL(origin).hostname)) return cb(null, true);
     cb(null, false);
   },
 }));
