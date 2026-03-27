@@ -61,67 +61,79 @@ async function fetchShopifyRefund(orderName, sku) {
   // Shopify order names may have a store suffix (e.g. #4758AUS)
   // Try with suffix first, then without
   const suffixes = ['AUS', ''];
-  let orders = [];
+  let allOrders = [];
+  let searchedName = '';
 
   try {
     for (const suffix of suffixes) {
-      const searchName = `#${orderNum}${suffix}`;
-      const url = `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(searchName)}&status=any&fields=id,name,order_number,refunds,shipping_lines`;
+      searchedName = `#${orderNum}${suffix}`;
+      const url = `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(searchedName)}&status=any&fields=id,name,order_number,refunds,shipping_lines,line_items`;
       const response = await axios.get(url, {
         headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
       });
-      orders = response.data?.orders || [];
-      if (orders.length > 0) {
-        console.log(`[redo] Found Shopify order with name=${searchName}`);
+      allOrders = response.data?.orders || [];
+      if (allOrders.length > 0) {
+        console.log(`[redo] Found ${allOrders.length} Shopify order(s) with name=${searchedName}: ${allOrders.map(o => o.name).join(', ')}`);
         break;
       }
     }
-    if (orders.length === 0) {
+    if (allOrders.length === 0) {
       console.log(`[redo] Shopify order ${orderName} not found (tried suffixes: ${suffixes.join(', ')})`);
       return null;
     }
 
-    const order = orders[0];
+    // Prefer exact name match (Shopify name search can return partial matches like #6084-RESEND for #6084)
+    const exactMatch = allOrders.find(o => o.name === searchedName);
+    const order = exactMatch || allOrders[0];
     const refunds = order.refunds || [];
-    if (refunds.length === 0) {
-      console.log(`[redo] Shopify order ${orderName} has no refunds`);
-      return null;
-    }
 
     // Sum product refunds for the matching SKU across all refund events
     let productRefundCents = 0;
     let shippingRefundCents = 0;
 
     for (const refund of refunds) {
-      // Product refund line items
       for (const rli of (refund.refund_line_items || [])) {
         const itemSku = rli.line_item?.sku || '';
         if (itemSku === sku) {
           productRefundCents += Math.round(parseFloat(rli.subtotal || 0) * 100);
         }
       }
-      // Shipping refund (order_adjustments with kind = 'shipping_refund')
       for (const adj of (refund.order_adjustments || [])) {
         if (adj.kind === 'shipping_refund') {
-          // amount is negative in Shopify, so negate it
           shippingRefundCents += Math.abs(Math.round(parseFloat(adj.amount || 0) * 100));
         }
       }
     }
 
-    const totalCents = productRefundCents + shippingRefundCents;
-    if (totalCents === 0) {
-      console.log(`[redo] Shopify order ${orderName} has refunds but none for SKU ${sku}`);
-      return null;
+    // If Shopify has refund records, use them
+    if (productRefundCents > 0) {
+      const result = {
+        product_refund: productRefundCents / 100,
+        shipping_refund: shippingRefundCents / 100,
+        total_refund: (productRefundCents + shippingRefundCents) / 100,
+      };
+      console.log(`[redo] Shopify refund for ${orderName}/${sku}:`, JSON.stringify(result));
+      return result;
     }
 
-    const result = {
-      product_refund: productRefundCents / 100,
-      shipping_refund: shippingRefundCents / 100,
-      total_refund: totalCents / 100,
-    };
-    console.log(`[redo] Shopify refund for ${orderName}/${sku}:`, JSON.stringify(result));
-    return result;
+    // Fallback: Redo-handled returns have no Shopify refund records.
+    // Use the original line item price as the product-only refund amount.
+    // This strips out any shipping component that Redo may have bundled in.
+    const lineItem = (order.line_items || []).find(li => li.sku === sku);
+    if (lineItem) {
+      const originalPriceCents = Math.round(parseFloat(lineItem.price || 0) * 100) * (lineItem.quantity || 1);
+      const result = {
+        product_refund: originalPriceCents / 100,
+        shipping_refund: 0,
+        total_refund: originalPriceCents / 100,
+        source: 'line_item_price',
+      };
+      console.log(`[redo] No Shopify refund for ${orderName}/${sku}, using line item price: $${result.product_refund}`);
+      return result;
+    }
+
+    console.log(`[redo] Shopify order ${orderName} has no refund or line item for SKU ${sku}`);
+    return null;
   } catch (err) {
     console.error(`[redo] Failed to fetch Shopify order ${orderName}:`, err.response?.status, err.message);
     return null;
@@ -172,7 +184,7 @@ router.get('/shopify-refund', async (req, res) => {
     // Try with AUS suffix first, then without
     const orderNum = orderName.replace(/^#/, '');
     const suffixes = ['AUS', ''];
-    let orders = [];
+    let allOrders = [];
     let matchedName = '';
     for (const suffix of suffixes) {
       const searchName = `#${orderNum}${suffix}`;
@@ -180,15 +192,17 @@ router.get('/shopify-refund', async (req, res) => {
       const resp = await axios.get(url, {
         headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
       });
-      orders = resp.data?.orders || [];
-      if (orders.length > 0) { matchedName = searchName; break; }
+      allOrders = resp.data?.orders || [];
+      if (allOrders.length > 0) { matchedName = searchName; break; }
     }
 
-    if (orders.length === 0) {
+    if (allOrders.length === 0) {
       return res.json({ found: false, searched_names: suffixes.map(s => `#${orderNum}${s}`), message: 'No orders found' });
     }
 
-    const order = orders[0];
+    // Prefer exact name match (Shopify name search can return partial matches like #6084-RESEND for #6084)
+    const exactMatch = allOrders.find(o => o.name === matchedName);
+    const order = exactMatch || allOrders[0];
     const refunds = order.refunds || [];
 
     // Raw refund data for debugging
@@ -231,6 +245,7 @@ router.get('/shopify-refund', async (req, res) => {
       order_name: order.name,
       order_id: order.id,
       financial_status: order.financial_status,
+      all_matched_orders: allOrders.map(o => ({ name: o.name, id: o.id, financial_status: o.financial_status })),
       refunds_count: refunds.length,
       refund_details: refundDetails,
       line_items: lineItems,
@@ -392,9 +407,9 @@ router.post('/', async (req, res) => {
 
       crossCheckCount++;
       const shopifyRefund = await fetchShopifyRefund(rec.shopify_order_name, rec.sku);
-      if (shopifyRefund && shopifyRefund.total_refund > rec.refund_amount) {
-        console.log(`[redo] Upgrading refund for ${rec.shopify_order_name}/${rec.sku}: $${rec.refund_amount} -> $${shopifyRefund.total_refund} (product=$${shopifyRefund.product_refund} + shipping=$${shopifyRefund.shipping_refund})`);
-        rec.refund_amount = shopifyRefund.total_refund;
+      if (shopifyRefund && shopifyRefund.product_refund !== rec.refund_amount) {
+        console.log(`[redo] Correcting refund for ${rec.shopify_order_name}/${rec.sku}: $${rec.refund_amount} -> $${shopifyRefund.product_refund} (source=${shopifyRefund.source || 'refund_record'})`);
+        rec.refund_amount = shopifyRefund.product_refund;
         crossCheckUpdated++;
       }
     }
