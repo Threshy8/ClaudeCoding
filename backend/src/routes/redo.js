@@ -14,6 +14,111 @@ function toStoreDate(isoString) {
   return d.toLocaleDateString('en-CA', { timeZone: TZ });
 }
 
+// ── Shopify helpers ──────────────────────────────────────────────────────────
+
+async function getShopifyAccessToken() {
+  const storeUrl = process.env.SHOPIFY_STORE_URL;
+  if (process.env.SHOPIFY_ACCESS_TOKEN) return process.env.SHOPIFY_ACCESS_TOKEN;
+  const clientId = process.env.SHOPIFY_CLIENT_ID;
+  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+  if (!storeUrl || !clientId || !clientSecret) return null;
+
+  const base = storeUrl.replace(/\/$/, '');
+  const params = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: 'client_credentials',
+  });
+  const response = await axios.post(`${base}/admin/oauth/access_token`, params.toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    maxRedirects: 0,
+    validateStatus: (status) => status >= 200 && status < 300,
+  });
+  return response.data?.access_token || null;
+}
+
+/**
+ * Fetch refund details for a specific order from Shopify Orders API.
+ * Returns { product_refund, shipping_refund, total_refund } in dollars,
+ * or null if the order has no refunds or can't be fetched.
+ */
+async function fetchShopifyRefund(orderName, sku) {
+  const storeUrl = process.env.SHOPIFY_STORE_URL;
+  if (!storeUrl) return null;
+
+  let accessToken;
+  try {
+    accessToken = await getShopifyAccessToken();
+  } catch (e) {
+    console.error('[redo] Failed to get Shopify access token:', e.message);
+    return null;
+  }
+  if (!accessToken) return null;
+
+  const base = storeUrl.replace(/\/$/, '');
+  const orderNum = orderName.replace(/^#/, '');
+
+  try {
+    const url = `${base}/admin/api/2024-01/orders.json?name=${encodeURIComponent(orderName)}&status=any&fields=id,name,order_number,refunds,shipping_lines`;
+    const response = await axios.get(url, {
+      headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
+    });
+
+    const orders = response.data?.orders || [];
+    if (orders.length === 0) {
+      console.log(`[redo] Shopify order ${orderName} not found`);
+      return null;
+    }
+
+    const order = orders[0];
+    const refunds = order.refunds || [];
+    if (refunds.length === 0) {
+      console.log(`[redo] Shopify order ${orderName} has no refunds`);
+      return null;
+    }
+
+    // Sum product refunds for the matching SKU across all refund events
+    let productRefundCents = 0;
+    let shippingRefundCents = 0;
+
+    for (const refund of refunds) {
+      // Product refund line items
+      for (const rli of (refund.refund_line_items || [])) {
+        const itemSku = rli.line_item?.sku || '';
+        if (itemSku === sku) {
+          productRefundCents += Math.round(parseFloat(rli.subtotal || 0) * 100);
+        }
+      }
+      // Shipping refund (order_adjustments with kind = 'shipping_refund')
+      for (const adj of (refund.order_adjustments || [])) {
+        if (adj.kind === 'shipping_refund') {
+          // amount is negative in Shopify, so negate it
+          shippingRefundCents += Math.abs(Math.round(parseFloat(adj.amount || 0) * 100));
+        }
+      }
+    }
+
+    const totalCents = productRefundCents + shippingRefundCents;
+    if (totalCents === 0) {
+      console.log(`[redo] Shopify order ${orderName} has refunds but none for SKU ${sku}`);
+      return null;
+    }
+
+    const result = {
+      product_refund: productRefundCents / 100,
+      shipping_refund: shippingRefundCents / 100,
+      total_refund: totalCents / 100,
+    };
+    console.log(`[redo] Shopify refund for ${orderName}/${sku}:`, JSON.stringify(result));
+    return result;
+  } catch (err) {
+    console.error(`[redo] Failed to fetch Shopify order ${orderName}:`, err.response?.status, err.message);
+    return null;
+  }
+}
+
+// ── Redo API helpers ─────────────────────────────────────────────────────────
+
 async function fetchAllRedoReturns(updatedAtMin) {
   const returns = [];
   let pageContinue = null;
@@ -170,6 +275,29 @@ router.post('/', async (req, res) => {
       return !coveredSet.has(`${orderNum}|${r.sku}`);
     });
 
+    // Cross-check against Shopify API for orders not in shopify_sales
+    // (old orders where Redo may underreport refund amounts)
+    const { data: salesOrders } = await supabase
+      .from('shopify_sales')
+      .select('order_number')
+      .eq('store', store);
+    const salesOrderSet = new Set((salesOrders || []).map(r => r.order_number));
+
+    let crossCheckCount = 0;
+    let crossCheckUpdated = 0;
+    for (const rec of filteredRecords) {
+      const orderNum = (rec.shopify_order_name || '').replace(/^#/, '');
+      if (salesOrderSet.has(orderNum)) continue; // Recent order, Redo amount is fine
+
+      crossCheckCount++;
+      const shopifyRefund = await fetchShopifyRefund(rec.shopify_order_name, rec.sku);
+      if (shopifyRefund && shopifyRefund.total_refund > rec.refund_amount) {
+        console.log(`[redo] Upgrading refund for ${rec.shopify_order_name}/${rec.sku}: $${rec.refund_amount} -> $${shopifyRefund.total_refund} (product=$${shopifyRefund.product_refund} + shipping=$${shopifyRefund.shipping_refund})`);
+        rec.refund_amount = shopifyRefund.total_refund;
+        crossCheckUpdated++;
+      }
+    }
+
     // Clear old Redo returns and insert fresh
     await supabase.from('redo_returns').delete().eq('store', store);
 
@@ -197,6 +325,8 @@ router.post('/', async (req, res) => {
       records_deduped: aggregatedRecords.length - filteredRecords.length,
       records_attempted: filteredRecords.length,
       records_inserted: insertedCount,
+      shopify_cross_checked: crossCheckCount,
+      shopify_cross_check_updated: crossCheckUpdated,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
