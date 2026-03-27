@@ -217,9 +217,13 @@ router.post('/shopify', async (req, res) => {
           .reduce((sum, da) => sum + (parseFloat(da.amount) || 0), 0);
         const lineRevenue = (parseFloat(item.price) * qty) - discountTotal;
 
-        if (!bySku[sku]) bySku[sku] = { product_name: item.title || item.name || 'Unknown', qty: 0, revenue: 0 };
+        const grossRevenue = parseFloat(item.price) * qty;
+
+        if (!bySku[sku]) bySku[sku] = { product_name: item.title || item.name || 'Unknown', qty: 0, revenue: 0, grossRevenue: 0, discount: 0 };
         bySku[sku].qty += qty;
         bySku[sku].revenue += lineRevenue;
+        bySku[sku].grossRevenue += grossRevenue;
+        bySku[sku].discount += discountTotal;
       }
 
       if (Object.keys(bySku).length === 0) continue;
@@ -240,6 +244,8 @@ router.post('/shopify', async (req, res) => {
 
       for (const [sku, d] of Object.entries(bySku)) {
         const lineRevenue = Math.round(d.revenue * 100) / 100;
+        const grossPrice = Math.round(d.grossRevenue * 100) / 100;
+        const discountAmount = Math.round(d.discount * 100) / 100;
         salesRecords.push({
           ...commonFields,
           sku,
@@ -247,6 +253,8 @@ router.post('/shopify', async (req, res) => {
           quantity_sold:        d.qty,
           sale_price:           Math.round((d.revenue / d.qty) * 100) / 100,
           line_revenue:         lineRevenue,
+          gross_price:          grossPrice,
+          discount_amount:      discountAmount,
         });
       }
 

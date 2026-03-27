@@ -77,7 +77,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   // 4. Get gross sales for the period (by order_date)
   const { data: periodSales, error: periodSalesError } = await supabase
     .from('shopify_sales')
-    .select('sku, product_name, quantity_sold, sale_price, line_revenue, order_date')
+    .select('sku, product_name, quantity_sold, sale_price, line_revenue, gross_price, discount_amount, order_date')
     .gte('order_date', periodStart)
     .lt('order_date', periodEnd)
     .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
@@ -197,16 +197,21 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   // --- Build period gross sales summary per SKU ---
   // grossRevenueCents accumulates in integer cents
-  const periodSkuMap = {}; // { sku: { product_name, gross_units, grossRevenueCents } }
+  const periodSkuMap = {}; // { sku: { product_name, gross_units, grossRevenueCents, grossPriceCents, discountCents } }
   for (const s of periodSales) {
     if (!periodSkuMap[s.sku]) {
-      periodSkuMap[s.sku] = { product_name: s.product_name, gross_units: 0, grossRevenueCents: 0 };
+      periodSkuMap[s.sku] = { product_name: s.product_name, gross_units: 0, grossRevenueCents: 0, grossPriceCents: 0, discountCents: 0 };
     }
     periodSkuMap[s.sku].gross_units += s.quantity_sold;
     const lineRevCents = s.line_revenue != null
       ? toCents(s.line_revenue)
       : toCents(s.sale_price) * s.quantity_sold;
     periodSkuMap[s.sku].grossRevenueCents += lineRevCents;
+    // Accumulate pre-discount gross price and discount amount
+    periodSkuMap[s.sku].grossPriceCents += s.gross_price != null
+      ? toCents(s.gross_price)
+      : lineRevCents; // fallback: if gross_price not yet populated, use line_revenue
+    periodSkuMap[s.sku].discountCents += toCents(s.discount_amount);
   }
 
   // Merge period refunds into periodSkuMap so cross-period returns create entries too
@@ -292,11 +297,11 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   const taxTotalCents = sumVirtualCents(virtualRows, 'tax');
 
   // --- Sales breakdown (all in integer cents) ---
-  // NOTE: sale_price is already net of discounts (discount_allocations subtracted during
-  // Shopify sync), so gross_sales = item revenue after discounts, before refunds.
-  // Discount breakdown is not stored separately in shopify_sales.
-  const grossSalesCents = Object.values(periodSkuMap).reduce((s, d) => s + d.grossRevenueCents, 0);
-  const totalDiscounts = 0; // Already baked into sale_price during sync
+  // gross_sales = pre-discount price × qty (matches Shopify's "Gross sales")
+  // total_discounts = sum of discount_allocations (matches Shopify's "Discounts")
+  // grossRevenueCents = post-discount line revenue (gross_sales - discounts)
+  const grossSalesCents = Object.values(periodSkuMap).reduce((s, d) => s + d.grossPriceCents, 0);
+  const totalDiscountsCents = Object.values(periodSkuMap).reduce((s, d) => s + d.discountCents, 0);
 
   // Split refunds: product returns vs shipping/virtual SKU refunds
   const totalReturnsCents = Object.entries(periodRefundMap)
@@ -304,7 +309,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .reduce((s, [, d]) => s + d.subtotalCents, 0);
   const shippingRefundsCents = (periodRefundMap['shipping'] || { subtotalCents: 0 }).subtotalCents;
 
-  const netSalesCents = grossSalesCents - totalReturnsCents;
+  const netSalesCents = grossSalesCents - totalDiscountsCents - totalReturnsCents;
   const shippingRevenueCents = shippingTotalCents - shippingRefundsCents;
   const totalCollectedCents = netSalesCents + redoFeesCents; // excludes shipping to match Shopify "Total sales over time"
 
@@ -329,7 +334,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     tax_total: taxTotalCents / 100,
     // Sales breakdown (mirrors Shopify's Total Sales view)
     gross_sales: grossSalesCents / 100,
-    total_discounts: totalDiscounts,
+    total_discounts: totalDiscountsCents / 100,
     total_returns: totalReturnsCents / 100,
     net_sales: netSalesCents / 100,
     shipping_revenue: shippingRevenueCents / 100,
@@ -810,14 +815,34 @@ router.get('/entries/by-sku', async (req, res) => {
     const shippingTotalCents = sumVirtualCents(virtualRows, 'shipping');
     const taxTotalCents = sumVirtualCents(virtualRows, 'tax');
 
+    // Fetch gross_price and discount_amount from shopify_sales for proper Shopify metrics
+    const { data: periodSalesForGross } = await supabase
+      .from('shopify_sales')
+      .select('gross_price, discount_amount')
+      .gte('order_date', start_date)
+      .lte('order_date', end_date)
+      .eq('store', store)
+      .not('sku', 'in', '(shipping,x-redo,tax)');
+
+    let grossSalesCents = 0;
+    let totalDiscountsCents = 0;
+    for (const row of (periodSalesForGross || [])) {
+      grossSalesCents += row.gross_price != null
+        ? toCents(row.gross_price)
+        : 0;
+      totalDiscountsCents += toCents(row.discount_amount);
+    }
+    // Fallback: if gross_price not yet populated, use post-discount revenue
+    if (grossSalesCents === 0) {
+      grossSalesCents = Object.values(skuMap).reduce((s, d) => s + d.revenueCents, 0);
+    }
+
     // Sales breakdown — all in integer cents
-    const grossSalesCents = Object.values(skuMap).reduce((s, d) => s + d.revenueCents, 0);
-    const totalDiscounts = 0; // Already baked into sale_price during sync
     const totalReturnsCents = Object.entries(refundMap)
       .filter(([sku]) => !VIRTUAL_REFUND_SKUS.includes(sku))
       .reduce((s, [, d]) => s + d.subtotalCents, 0);
     const shippingRefundsCents = (refundMap['shipping'] || { subtotalCents: 0 }).subtotalCents;
-    const netSalesCents = grossSalesCents - totalReturnsCents;
+    const netSalesCents = grossSalesCents - totalDiscountsCents - totalReturnsCents;
     const shippingRevenueCents = shippingTotalCents - shippingRefundsCents;
     const totalCollectedCents = netSalesCents + redoFeesCents; // excludes shipping to match Shopify "Total sales over time"
 
@@ -838,7 +863,7 @@ router.get('/entries/by-sku', async (req, res) => {
       shipping_total: shippingTotalCents / 100,
       tax_total: taxTotalCents / 100,
       gross_sales: grossSalesCents / 100,
-      total_discounts: totalDiscounts,
+      total_discounts: totalDiscountsCents / 100,
       total_returns: totalReturnsCents / 100,
       net_sales: netSalesCents / 100,
       shipping_revenue: shippingRevenueCents / 100,
