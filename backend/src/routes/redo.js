@@ -413,30 +413,6 @@ router.post('/', async (req, res) => {
       return !coveredSet.has(`${orderNum}|${r.sku}`);
     });
 
-    // Cross-check against Shopify API for orders not in shopify_sales
-    // (old orders where Redo may underreport refund amounts)
-    const { data: salesOrders } = await supabase
-      .from('shopify_sales')
-      .select('order_number')
-      .eq('store', store);
-    const salesOrderSet = new Set((salesOrders || []).map(r => r.order_number));
-
-    let crossCheckCount = 0;
-    let crossCheckUpdated = 0;
-    for (const rec of filteredRecords) {
-      const orderNum = (rec.shopify_order_name || '').replace(/^#/, '');
-      if (salesOrderSet.has(orderNum)) continue; // Recent order, Redo amount is fine
-
-      if (crossCheckCount > 0) await sleep(600); // Rate limit: stay under 2 calls/sec
-      crossCheckCount++;
-      const shopifyRefund = await fetchShopifyRefund(rec.shopify_order_name, rec.sku);
-      if (shopifyRefund && shopifyRefund.product_refund !== rec.refund_amount) {
-        console.log(`[redo] Correcting refund for ${rec.shopify_order_name}/${rec.sku}: $${rec.refund_amount} -> $${shopifyRefund.product_refund} (source=${shopifyRefund.source || 'refund_record'})`);
-        rec.refund_amount = shopifyRefund.product_refund;
-        crossCheckUpdated++;
-      }
-    }
-
     // Clear old Redo returns and insert fresh
     await supabase.from('redo_returns').delete().eq('store', store);
 
@@ -464,8 +440,6 @@ router.post('/', async (req, res) => {
       records_deduped: aggregatedRecords.length - filteredRecords.length,
       records_attempted: filteredRecords.length,
       records_inserted: insertedCount,
-      shopify_cross_checked: crossCheckCount,
-      shopify_cross_check_updated: crossCheckUpdated,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
