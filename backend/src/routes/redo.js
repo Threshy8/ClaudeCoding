@@ -176,7 +176,7 @@ router.get('/shopify-refund', async (req, res) => {
     let matchedName = '';
     for (const suffix of suffixes) {
       const searchName = `#${orderNum}${suffix}`;
-      const url = `${storeUrl}/admin/api/2024-01/orders.json?name=${encodeURIComponent(searchName)}&status=any`;
+      const url = `${storeUrl}/admin/api/2024-01/orders.json?name=${encodeURIComponent(searchName)}&status=any&fields=id,name,order_number,financial_status,refunds,line_items,shipping_lines`;
       const resp = await axios.get(url, {
         headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
       });
@@ -209,6 +209,20 @@ router.get('/shopify-refund', async (req, res) => {
       })),
     }));
 
+    // Also get original line items for the SKU to show sale price
+    const lineItems = (order.line_items || []).map(li => ({
+      sku: li.sku,
+      title: li.title,
+      price: li.price,
+      quantity: li.quantity,
+      discount_allocations: li.discount_allocations,
+    }));
+    const shippingLines = (order.shipping_lines || []).map(sl => ({
+      title: sl.title,
+      price: sl.price,
+      discounted_price: sl.discounted_price,
+    }));
+
     // Also run fetchShopifyRefund to show what the sync would compute
     const computed = await fetchShopifyRefund(matchedName || `#${orderNum}`, sku);
 
@@ -216,8 +230,11 @@ router.get('/shopify-refund', async (req, res) => {
       found: true,
       order_name: order.name,
       order_id: order.id,
+      financial_status: order.financial_status,
       refunds_count: refunds.length,
       refund_details: refundDetails,
+      line_items: lineItems,
+      shipping_lines: shippingLines,
       computed_for_sku: sku || '(none)',
       computed_result: computed,
     });
