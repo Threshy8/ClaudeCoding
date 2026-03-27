@@ -72,7 +72,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   const { data: allRedoReturns } = await supabase
     .from('redo_returns')
     .select('sku, quantity_returned, shopify_order_name')
-    .in('status', ['complete', 'open']);
+    .eq('status', 'complete');
 
   // 4. Get gross sales for the period (by order_date)
   const { data: periodSales, error: periodSalesError } = await supabase
@@ -101,7 +101,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     .select('sku, product_name, quantity_returned, refund_amount, shopify_order_name, return_date')
     .gte('return_date', periodStart)
     .lt('return_date', periodEnd)
-    .in('status', ['complete', 'open']);
+    .eq('status', 'complete');
 
   // --- Build average cost map per SKU ---
   // totalCostCents accumulates in integer cents to avoid float drift
@@ -658,7 +658,7 @@ router.get('/entries/by-sku', async (req, res) => {
     const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
     const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
     const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded, order_number');
-    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name').in('status', ['complete', 'open']);
+    const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name').eq('status', 'complete');
 
     // De-dup set: skip Redo returns where shopify_refunds already has the same order+sku
     const refundOrderSkuSet = new Set();
@@ -709,7 +709,7 @@ router.get('/entries/by-sku', async (req, res) => {
       .gte('return_date', start_date)
       .lte('return_date', end_date)
       .eq('store', store)
-      .in('status', ['complete', 'open']);
+      .eq('status', 'complete');
 
     // Build period refund de-dup set
     const periodRefundOrderSkuSet = new Set();

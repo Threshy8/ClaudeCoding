@@ -413,6 +413,32 @@ router.post('/', async (req, res) => {
       return !coveredSet.has(`${orderNum}|${r.sku}`);
     });
 
+    // Batched Shopify cross-check for complete returns not in shopify_sales
+    // Corrects refund_amount to product-only (excludes shipping) using Shopify API
+    const { data: salesOrders } = await supabase
+      .from('shopify_sales')
+      .select('order_number')
+      .eq('store', store);
+    const salesOrderSet = new Set((salesOrders || []).map(r => r.order_number));
+
+    const toCheck = filteredRecords.filter(r => {
+      if (r.status !== 'complete') return false;
+      const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
+      return !salesOrderSet.has(orderNum);
+    });
+
+    let crossCheckUpdated = 0;
+    for (let i = 0; i < toCheck.length; i++) {
+      if (i > 0) await sleep(500);
+      const rec = toCheck[i];
+      const shopifyRefund = await fetchShopifyRefund(rec.shopify_order_name, rec.sku);
+      if (shopifyRefund && shopifyRefund.product_refund !== rec.refund_amount) {
+        console.log(`[redo] Correcting ${rec.shopify_order_name}/${rec.sku}: $${rec.refund_amount} -> $${shopifyRefund.product_refund}`);
+        rec.refund_amount = shopifyRefund.product_refund;
+        crossCheckUpdated++;
+      }
+    }
+
     // Clear old Redo returns and insert fresh
     await supabase.from('redo_returns').delete().eq('store', store);
 
@@ -440,6 +466,8 @@ router.post('/', async (req, res) => {
       records_deduped: aggregatedRecords.length - filteredRecords.length,
       records_attempted: filteredRecords.length,
       records_inserted: insertedCount,
+      shopify_cross_checked: toCheck.length,
+      shopify_cross_check_updated: crossCheckUpdated,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
