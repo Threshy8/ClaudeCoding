@@ -350,6 +350,28 @@ Always extract "due_date" from payment terms like "Due 14-Mar-26" or "NET 14 DAY
       inv.line_items = inv.line_items.map(autoClassifyLineItem);
     }
 
+    // Auto-match packaging line items against packaging_sku_map
+    try {
+      const { data: skuMapRows } = await supabase.from('packaging_sku_map').select('box_code, box_description, skus');
+      if (skuMapRows && skuMapRows.length > 0) {
+        for (const inv of invoices) {
+          for (const li of inv.line_items) {
+            if (li.category !== 'packaging') continue;
+            const descUpper = (li.description || '').toUpperCase();
+            for (const mapping of skuMapRows) {
+              if (descUpper.includes(mapping.box_code.toUpperCase())) {
+                li.matched_skus = mapping.skus || [];
+                li.matched_box = mapping.box_description || mapping.box_code;
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (mapErr) {
+      console.error('[parse-pdf] SKU map lookup failed (non-fatal):', mapErr.message);
+    }
+
     // Upload original PDF to Supabase Storage
     let pdfPath = null;
     try {
@@ -614,6 +636,49 @@ Line items: ${line_items.map(li => `${li.description} $${li.amount_ex_gst} (${li
   });
 
   res.json({ summary: msg.content[0]?.text || '' });
+});
+
+// ── GET /api/fulfillment/packaging-sku-map ───────────────────────────────────
+router.get('/packaging-sku-map', async (req, res) => {
+  const { data, error } = await supabase
+    .from('packaging_sku_map')
+    .select('*')
+    .order('box_code');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// ── POST /api/fulfillment/packaging-sku-map ──────────────────────────────────
+router.post('/packaging-sku-map', async (req, res) => {
+  const { box_code, box_description, skus, notes } = req.body;
+  if (!box_code) return res.status(400).json({ error: 'box_code is required' });
+  const { data, error } = await supabase
+    .from('packaging_sku_map')
+    .insert({ box_code, box_description: box_description || null, skus: skus || [], notes: notes || null })
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// ── PUT /api/fulfillment/packaging-sku-map/:id ───────────────────────────────
+router.put('/packaging-sku-map/:id', async (req, res) => {
+  const { box_code, box_description, skus, notes } = req.body;
+  const { data, error } = await supabase
+    .from('packaging_sku_map')
+    .update({ box_code, box_description: box_description || null, skus: skus || [], notes: notes || null })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// ── DELETE /api/fulfillment/packaging-sku-map/:id ────────────────────────────
+router.delete('/packaging-sku-map/:id', async (req, res) => {
+  const { error } = await supabase.from('packaging_sku_map').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true });
 });
 
 module.exports = router;

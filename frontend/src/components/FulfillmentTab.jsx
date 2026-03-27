@@ -10,13 +10,13 @@ const COST_TYPE_COLOR = { variable: '#10b981', fixed: '#6b7280' };
 const COST_TYPE_LABEL = { variable: 'Variable', fixed: 'Fixed' };
 
 export default function FulfillmentTab({ dateRange }) {
-  const [view, setView] = useState('invoices'); // 'invoices' | 'costsheet' | 'auspost'
+  const [view, setView] = useState('invoices'); // 'invoices' | 'costsheet' | 'auspost' | 'pkgmap'
 
   return (
     <div>
       {/* Sub-nav */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-        {[['invoices', 'Invoices'], ['costsheet', 'Order Cost Sheet'], ['auspost', 'Australia Post']].map(([key, label]) => (
+        {[['invoices', 'Invoices'], ['costsheet', 'Order Cost Sheet'], ['auspost', 'Australia Post'], ['pkgmap', 'Packaging SKU Map']].map(([key, label]) => (
           <button
             key={key}
             onClick={() => setView(key)}
@@ -39,6 +39,7 @@ export default function FulfillmentTab({ dateRange }) {
       {view === 'invoices'   && <InvoicesView   dateRange={dateRange} />}
       {view === 'costsheet'  && <CostSheetView  dateRange={dateRange} />}
       {view === 'auspost'    && <AusPostView    dateRange={dateRange} />}
+      {view === 'pkgmap'     && <PackagingSkuMapView />}
     </div>
   );
 }
@@ -372,7 +373,14 @@ function InvoicesView({ dateRange }) {
                     <tbody>
                       {(inv.line_items || []).map((li, idx) => (
                         <tr key={idx}>
-                          <td style={{ fontSize: 13 }}>{li.description}</td>
+                          <td style={{ fontSize: 13 }}>
+                            {li.description}
+                            {li.category === 'packaging' && li.matched_skus?.length > 0 && (
+                              <div style={{ fontSize: 10, color: '#64748b', marginTop: 3, fontWeight: 500 }}>
+                                Used for: {li.matched_box || li.matched_skus.join(', ')}
+                              </div>
+                            )}
+                          </td>
                           <td>
                             <EditableSelect value={li.category} onChange={v => updateParsedLine(activeTab, idx, 'category', v)}
                               options={[['inbound','Inbound'],['outbound','Outbound'],['delivery','Delivery'],['packaging','Packaging'],['other','Other']]}
@@ -1014,6 +1022,156 @@ function LineItemsTable({ items }) {
     </div>
   );
 }
+
+// ─── Packaging SKU Map View ──────────────────────────────────────────────────
+function PackagingSkuMapView() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null); // id or 'new'
+  const [form, setForm] = useState({ box_code: '', box_description: '', skus: '', notes: '' });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/fulfillment/packaging-sku-map');
+      setRows(await res.json());
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const startEdit = (row) => {
+    setEditing(row.id);
+    setForm({ box_code: row.box_code, box_description: row.box_description || '', skus: (row.skus || []).join(', '), notes: row.notes || '' });
+  };
+
+  const startNew = () => {
+    setEditing('new');
+    setForm({ box_code: '', box_description: '', skus: '', notes: '' });
+  };
+
+  const save = async () => {
+    const payload = {
+      box_code: form.box_code.trim(),
+      box_description: form.box_description.trim() || null,
+      skus: form.skus.split(',').map(s => s.trim()).filter(Boolean),
+      notes: form.notes.trim() || null,
+    };
+    if (!payload.box_code) return;
+    try {
+      if (editing === 'new') {
+        await apiFetch('/api/fulfillment/packaging-sku-map', { method: 'POST', body: JSON.stringify(payload) });
+      } else {
+        await apiFetch(`/api/fulfillment/packaging-sku-map/${editing}`, { method: 'PUT', body: JSON.stringify(payload) });
+      }
+      setEditing(null);
+      load();
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this mapping?')) return;
+    try {
+      await apiFetch(`/api/fulfillment/packaging-sku-map/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) { setError(e.message); }
+  };
+
+  if (loading) return <div className="loading">Loading…</div>;
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Packaging SKU Map</div>
+          <div className="text-muted" style={{ fontSize: 12, marginTop: 2 }}>
+            Maps box codes from packaging invoices to product SKUs. Used to auto-tag packaging line items during PDF parsing.
+          </div>
+        </div>
+        <button className="btn btn-primary" onClick={startNew}>+ Add Mapping</button>
+      </div>
+
+      {error && <div className="error-msg" style={{ marginBottom: 16 }}>{error}</div>}
+
+      <div className="card">
+        {rows.length === 0 && !editing ? (
+          <div className="empty">No mappings yet. Add a box code mapping to get started.</div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Box Code</th>
+                  <th>Description</th>
+                  <th>Product SKUs</th>
+                  <th>Notes</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  editing === row.id ? (
+                    <tr key={row.id}>
+                      <td><input value={form.box_code} onChange={e => setForm({ ...form, box_code: e.target.value })} style={inputStyle} /></td>
+                      <td><input value={form.box_description} onChange={e => setForm({ ...form, box_description: e.target.value })} style={inputStyle} /></td>
+                      <td><input value={form.skus} onChange={e => setForm({ ...form, skus: e.target.value })} placeholder="BLK1CAR, BRN1CAR" style={{ ...inputStyle, width: 220 }} /></td>
+                      <td><input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} style={inputStyle} /></td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>Cancel</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={row.id}>
+                      <td style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 13 }}>{row.box_code}</td>
+                      <td className="text-muted" style={{ fontSize: 13 }}>{row.box_description || '—'}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {(row.skus || []).map(sku => (
+                            <span key={sku} style={{ padding: '2px 6px', borderRadius: 4, background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 11, fontWeight: 600, fontFamily: 'monospace' }}>
+                              {sku}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="text-muted" style={{ fontSize: 12 }}>{row.notes || '—'}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => startEdit(row)} style={{ fontSize: 12 }}>Edit</button>
+                          <button className="btn btn-danger btn-sm" onClick={() => handleDelete(row.id)}>Del</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                ))}
+                {editing === 'new' && (
+                  <tr>
+                    <td><input value={form.box_code} onChange={e => setForm({ ...form, box_code: e.target.value })} placeholder="BX200B" style={inputStyle} /></td>
+                    <td><input value={form.box_description} onChange={e => setForm({ ...form, box_description: e.target.value })} placeholder="Brown RSC 200mm" style={inputStyle} /></td>
+                    <td><input value={form.skus} onChange={e => setForm({ ...form, skus: e.target.value })} placeholder="BLK1CAR, BRN1CAR" style={{ ...inputStyle, width: 220 }} /></td>
+                    <td><input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Optional notes" style={inputStyle} /></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>Cancel</button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const inputStyle = { fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', width: 150 };
 
 // ─── Australia Post View ─────────────────────────────────────────────────────
 function AusPostView({ dateRange }) {

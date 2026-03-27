@@ -65,3 +65,16 @@ alter table fulfillment_invoices add column if not exists supplier text default 
 
 -- Add pdf_url to store original invoice PDF link (Supabase Storage)
 alter table fulfillment_invoices add column if not exists pdf_url text;
+
+-- Packaging SKU Map — maps box codes to product SKUs
+create table if not exists packaging_sku_map (
+  id               uuid primary key default gen_random_uuid(),
+  box_code         text not null,
+  box_description  text,
+  skus             text[],
+  notes            text,
+  created_at       timestamptz default now()
+);
+
+alter table packaging_sku_map enable row level security;
+create policy "Allow all for anon" on packaging_sku_map for all using (true) with check (true);
