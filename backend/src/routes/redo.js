@@ -144,6 +144,70 @@ async function fetchAllRedoReturns(updatedAtMin) {
 }
 
 // GET /api/sync/redo/test — connectivity check
+// GET /api/sync/redo/shopify-refund?order=4758&sku=BLK2ATS — debug Shopify refund lookup
+router.get('/shopify-refund', async (req, res) => {
+  const orderName = req.query.order || '';
+  const sku = req.query.sku || '';
+  if (!orderName) return res.status(400).json({ error: 'order query param required' });
+
+  try {
+    const storeUrl = (process.env.SHOPIFY_STORE_URL || '').replace(/\/$/, '');
+    let accessToken;
+    try { accessToken = await getShopifyAccessToken(); } catch (e) {
+      return res.json({ error: `Auth failed: ${e.message}` });
+    }
+    if (!accessToken) return res.json({ error: 'No Shopify access token available' });
+
+    // Try both formats: #4758 and 4758
+    const nameWithHash = orderName.startsWith('#') ? orderName : `#${orderName}`;
+    const url = `${storeUrl}/admin/api/2024-01/orders.json?name=${encodeURIComponent(nameWithHash)}&status=any`;
+    const resp = await axios.get(url, {
+      headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' },
+    });
+    const orders = resp.data?.orders || [];
+
+    if (orders.length === 0) {
+      return res.json({ found: false, searched_name: nameWithHash, message: 'No orders found' });
+    }
+
+    const order = orders[0];
+    const refunds = order.refunds || [];
+
+    // Raw refund data for debugging
+    const refundDetails = refunds.map(r => ({
+      id: r.id,
+      created_at: r.created_at,
+      line_items: (r.refund_line_items || []).map(rli => ({
+        sku: rli.line_item?.sku,
+        title: rli.line_item?.title,
+        subtotal: rli.subtotal,
+        total_tax: rli.total_tax,
+        quantity: rli.quantity,
+      })),
+      adjustments: (r.order_adjustments || []).map(a => ({
+        kind: a.kind,
+        amount: a.amount,
+        reason: a.reason,
+      })),
+    }));
+
+    // Also run fetchShopifyRefund to show what the sync would compute
+    const computed = await fetchShopifyRefund(nameWithHash, sku);
+
+    res.json({
+      found: true,
+      order_name: order.name,
+      order_id: order.id,
+      refunds_count: refunds.length,
+      refund_details: refundDetails,
+      computed_for_sku: sku || '(none)',
+      computed_result: computed,
+    });
+  } catch (err) {
+    res.json({ error: err.response?.status + ' ' + (err.response?.data?.errors || err.message) });
+  }
+});
+
 router.get('/test', async (req, res) => {
   if (!TOKEN || !STORE_ID) {
     return res.json({ ok: false, error: 'REDO_API_TOKEN or REDO_STORE_ID not configured' });
