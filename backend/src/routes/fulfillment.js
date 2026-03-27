@@ -34,7 +34,7 @@ router.get('/summary', async (req, res) => {
 
   let query = supabase
     .from('fulfillment_invoices')
-    .select('id, invoice_date, invoice_ref, period_description, total_ex_gst, total_inc_gst, units_shipped, payment_status, paid_date, supplier');
+    .select('id, invoice_date, invoice_ref, period_description, total_ex_gst, total_inc_gst, units_shipped, payment_status, paid_date, supplier, pdf_url');
   if (start_date) query = query.gte('invoice_date', start_date);
   if (end_date)   query = query.lte('invoice_date', end_date);
 
@@ -350,7 +350,25 @@ Always extract "due_date" from payment terms like "Due 14-Mar-26" or "NET 14 DAY
       inv.line_items = inv.line_items.map(autoClassifyLineItem);
     }
 
-    res.json({ invoices });
+    // Upload original PDF to Supabase Storage
+    let pdfPath = null;
+    try {
+      const ts = Date.now();
+      const origName = (req.file.originalname || 'invoice.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
+      pdfPath = `${ts}_${origName}`;
+      const { error: uploadErr } = await supabase.storage
+        .from('invoices')
+        .upload(pdfPath, req.file.buffer, { contentType: 'application/pdf', upsert: false });
+      if (uploadErr) {
+        console.error('[parse-pdf] Storage upload failed:', uploadErr.message);
+        pdfPath = null;
+      }
+    } catch (storageErr) {
+      console.error('[parse-pdf] Storage upload error:', storageErr.message);
+      pdfPath = null;
+    }
+
+    res.json({ invoices, pdf_path: pdfPath });
   } catch (err) {
     console.error('PDF parse error:', err.message);
     res.status(500).json({ error: 'Failed to parse PDF: ' + err.message });
@@ -359,10 +377,17 @@ Always extract "due_date" from payment terms like "Due 14-Mar-26" or "NET 14 DAY
 
 // ── POST /api/fulfillment/invoices ────────────────────────────────────────────
 router.post('/invoices', async (req, res) => {
-  const { invoice_ref, invoice_date, due_date, period_description, units_shipped, orders_dispatched, supplier, line_items } = req.body;
+  const { invoice_ref, invoice_date, due_date, period_description, units_shipped, orders_dispatched, supplier, pdf_path, line_items } = req.body;
 
   if (!invoice_date || !line_items || line_items.length === 0)
     return res.status(400).json({ error: 'invoice_date and line_items are required' });
+
+  // Build public URL from pdf_path (uploaded during parse-pdf)
+  let pdfUrl = null;
+  if (pdf_path) {
+    const { data: urlData } = supabase.storage.from('invoices').getPublicUrl(pdf_path);
+    pdfUrl = urlData?.publicUrl || null;
+  }
 
   const totalExGst  = line_items.reduce((s, li) => s + (parseFloat(li.amount_ex_gst) || 0), 0);
   const totalGst    = line_items.reduce((s, li) => s + (parseFloat(li.gst) || 0), 0);
@@ -378,6 +403,7 @@ router.post('/invoices', async (req, res) => {
       units_shipped:      units_shipped || null,
       orders_dispatched:  orders_dispatched || null,
       supplier:           supplier || 'scc',
+      pdf_url:            pdfUrl,
       total_ex_gst:       Math.round(totalExGst  * 100) / 100,
       total_gst:          Math.round(totalGst    * 100) / 100,
       total_inc_gst:      Math.round(totalIncGst * 100) / 100,

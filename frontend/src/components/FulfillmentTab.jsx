@@ -142,7 +142,7 @@ function InvoicesView({ dateRange }) {
     try {
       await apiFetch('/api/fulfillment/invoices', {
         method: 'POST',
-        body: JSON.stringify(parsed.invoices[invIdx]),
+        body: JSON.stringify({ ...parsed.invoices[invIdx], pdf_path: parsed.pdf_path || null }),
       });
       const remaining = parsed.invoices.filter((_, i) => i !== invIdx);
       if (remaining.length === 0) {
@@ -168,7 +168,7 @@ function InvoicesView({ dateRange }) {
         try {
           await apiFetch('/api/fulfillment/invoices', {
             method: 'POST',
-            body: JSON.stringify(inv),
+            body: JSON.stringify({ ...inv, pdf_path: parsed.pdf_path || null }),
           });
           console.log(`[SaveAll] Invoice ${i} (${inv.invoice_ref}) saved OK`);
         } catch (innerErr) {
@@ -507,6 +507,12 @@ function InvoicesView({ dateRange }) {
                         </td>
                         <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 6 }}>
+                            {inv.pdf_url && (
+                              <a href={inv.pdf_url} target="_blank" rel="noopener noreferrer"
+                                className="btn btn-ghost btn-sm" style={{ fontSize: 12, textDecoration: 'none' }}>
+                                PDF
+                              </a>
+                            )}
                             <button className="btn btn-ghost btn-sm" onClick={() => toggleExpand(inv.id)} style={{ fontSize: 12 }}>
                               {expandedId === inv.id ? '▲ Hide' : '▼ Lines'}
                             </button>

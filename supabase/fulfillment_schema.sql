@@ -62,3 +62,6 @@ alter table fulfillment_line_items add constraint fulfillment_line_items_categor
 
 alter table fulfillment_line_items add column if not exists sku_mapping text;
 alter table fulfillment_invoices add column if not exists supplier text default 'scc';
+
+-- Add pdf_url to store original invoice PDF link (Supabase Storage)
+alter table fulfillment_invoices add column if not exists pdf_url text;
