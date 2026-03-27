@@ -56,7 +56,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   // 2. Get gross sales (all time) — used with all-time refunds for inventory on-hand
   const { data: allSales, error: allSalesError } = await supabase
     .from('shopify_sales')
-    .select('sku, quantity_sold, order_number')
+    .select('sku, quantity_sold')
     .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
 
   if (allSalesError) throw new Error(allSalesError.message);
@@ -64,7 +64,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   // 3. Get all refunds (all time) — subtract from gross to get net sold for inventory on-hand
   const { data: allRefunds, error: allRefundsError } = await supabase
     .from('shopify_refunds')
-    .select('sku, quantity_refunded');
+    .select('sku, quantity_refunded, order_number');
 
   if (allRefundsError) throw new Error(allRefundsError.message);
 
@@ -121,11 +121,11 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
     totalPurchasedMap[sku] = d.totalQty;
   }
 
-  // --- Build set of (order_number, sku) pairs that exist in shopify_sales ---
-  // Used to validate Redo returns: only count returns where the sale was recorded
-  const salesOrderSkuSet = new Set();
-  for (const s of allSales) {
-    if (s.order_number) salesOrderSkuSet.add(`${s.order_number}|${s.sku}`);
+  // --- Build set of (order_number, sku) pairs already in shopify_refunds ---
+  // Used to de-duplicate Redo returns: skip if the same order+sku is already refunded natively
+  const refundOrderSkuSet = new Set();
+  for (const r of allRefunds) {
+    if (r.order_number) refundOrderSkuSet.add(`${r.order_number}|${r.sku}`);
   }
 
   // --- Build all-time net units sold map per SKU (gross sales − all-time refunds) ---
@@ -138,9 +138,9 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
   }
   for (const r of (allRedoReturns || [])) {
     const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
-    if (salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) {
-      allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_returned;
-    }
+    // Skip if this order+sku already exists in shopify_refunds (avoid double-counting)
+    if (refundOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
+    allTimeSoldMap[r.sku] = (allTimeSoldMap[r.sku] || 0) - r.quantity_returned;
   }
 
   // --- Build period refund map (by refund_date) ---
@@ -159,10 +159,15 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
       refund_amount: parseFloat(r.refund_subtotal || 0),
     });
   }
-  // Merge Redo returns into period refund map — only where a matching sale exists
+  // Build set of (order_number, sku) pairs in period refunds for de-duplication
+  const periodRefundOrderSkuSet = new Set();
+  for (const r of periodRefunds) {
+    if (r.order_number) periodRefundOrderSkuSet.add(`${r.order_number}|${r.sku}`);
+  }
+  // Merge Redo returns into period refund map — skip if already in shopify_refunds
   for (const r of (periodRedoReturns || [])) {
     const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
-    if (!salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
+    if (periodRefundOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
     const sku = r.sku;
     if (!periodRefundMap[sku]) {
       periodRefundMap[sku] = { product_name: r.product_name, qty: 0, subtotalCents: 0, details: [] };
@@ -641,13 +646,14 @@ router.get('/entries/by-sku', async (req, res) => {
 
     // Get inventory on-hand from WAC data (purchases − all-time net sold)
     const { data: allPurchases } = await supabase.from('purchases').select('sku, product_name, quantity, unit_cost');
-    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold, order_number').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
-    const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded');
+    const { data: allSales } = await supabase.from('shopify_sales').select('sku, quantity_sold').neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
+    const { data: allRefunds } = await supabase.from('shopify_refunds').select('sku, quantity_refunded, order_number');
     const { data: allRedoReturns } = await supabase.from('redo_returns').select('sku, quantity_returned, shopify_order_name').eq('status', 'complete');
 
-    const salesOrderSkuSet = new Set();
-    for (const s of (allSales || [])) {
-      if (s.order_number) salesOrderSkuSet.add(`${s.order_number}|${s.sku}`);
+    // De-dup set: skip Redo returns where shopify_refunds already has the same order+sku
+    const refundOrderSkuSet = new Set();
+    for (const r of (allRefunds || [])) {
+      if (r.order_number) refundOrderSkuSet.add(`${r.order_number}|${r.sku}`);
     }
 
     const purchaseMap = {};
@@ -661,9 +667,8 @@ router.get('/entries/by-sku', async (req, res) => {
     for (const r of (allRefunds || [])) allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_refunded;
     for (const r of (allRedoReturns || [])) {
       const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
-      if (salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) {
-        allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_returned;
-      }
+      if (refundOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
+      allTimeSold[r.sku] = (allTimeSold[r.sku] || 0) - r.quantity_returned;
     }
 
     // Get period refunds (by refund_date) to compute net units/revenue
@@ -687,7 +692,7 @@ router.get('/entries/by-sku', async (req, res) => {
       });
     }
 
-    // Merge Redo returns into refund map — only completed, where a matching sale exists
+    // Merge Redo returns into refund map — skip if already in shopify_refunds
     const { data: periodRedoReturns } = await supabase
       .from('redo_returns')
       .select('sku, quantity_returned, refund_amount, shopify_order_name, return_date')
@@ -696,9 +701,15 @@ router.get('/entries/by-sku', async (req, res) => {
       .eq('store', store)
       .eq('status', 'complete');
 
+    // Build period refund de-dup set
+    const periodRefundOrderSkuSet = new Set();
+    for (const r of (periodRefunds || [])) {
+      if (r.order_number) periodRefundOrderSkuSet.add(`${r.order_number}|${r.sku}`);
+    }
+
     for (const r of (periodRedoReturns || [])) {
       const orderNum = (r.shopify_order_name || '').replace(/^#/, '');
-      if (!salesOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
+      if (periodRefundOrderSkuSet.has(`${orderNum}|${r.sku}`)) continue;
       if (!refundMap[r.sku]) refundMap[r.sku] = { qty: 0, subtotalCents: 0, details: [] };
       refundMap[r.sku].qty += r.quantity_returned;
       refundMap[r.sku].subtotalCents += toCents(r.refund_amount);
