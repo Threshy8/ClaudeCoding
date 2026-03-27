@@ -87,9 +87,10 @@ async function fetchShopifyRefund(orderName, sku) {
     const order = exactMatch || allOrders[0];
     const refunds = order.refunds || [];
 
-    // Sum product refunds for the matching SKU across all refund events
+    // Sum refund amounts from all refund events
     let productRefundCents = 0;
     let shippingRefundCents = 0;
+    let refundDiscrepancyCents = 0; // Redo uses order_adjustments instead of refund_line_items
 
     for (const refund of refunds) {
       for (const rli of (refund.refund_line_items || [])) {
@@ -101,33 +102,36 @@ async function fetchShopifyRefund(orderName, sku) {
       for (const adj of (refund.order_adjustments || [])) {
         if (adj.kind === 'shipping_refund') {
           shippingRefundCents += Math.abs(Math.round(parseFloat(adj.amount || 0) * 100));
+        } else if (adj.kind === 'refund_discrepancy') {
+          // Redo returns show as refund_discrepancy adjustments (negative = refund, positive = credit)
+          refundDiscrepancyCents += Math.round(parseFloat(adj.amount || 0) * 100);
         }
       }
     }
 
-    // If Shopify has refund records, use them
+    // If Shopify has refund_line_items for this SKU, use those (most accurate)
     if (productRefundCents > 0) {
-      const result = {
-        product_refund: productRefundCents / 100,
-        shipping_refund: shippingRefundCents / 100,
-        total_refund: (productRefundCents + shippingRefundCents) / 100,
-      };
-      console.log(`[redo] Shopify refund for ${orderName}/${sku}:`, JSON.stringify(result));
+      const result = { product_refund: productRefundCents / 100, shipping_refund: shippingRefundCents / 100, total_refund: (productRefundCents + shippingRefundCents) / 100 };
+      console.log(`[redo] Shopify refund_line_items for ${orderName}/${sku}:`, JSON.stringify(result));
       return result;
     }
 
-    // Fallback: Redo-handled returns have no Shopify refund records.
+    // If Shopify has refund_discrepancy adjustments (Redo-handled returns),
+    // the net negative amount (excluding shipping) is the product refund.
+    // Net of adjustments: e.g. -179.01 + 199.00 + -199.00 = -179.01
+    if (refundDiscrepancyCents !== 0) {
+      const netProductCents = Math.abs(refundDiscrepancyCents);
+      const result = { product_refund: netProductCents / 100, shipping_refund: shippingRefundCents / 100, total_refund: (netProductCents + shippingRefundCents) / 100, source: 'refund_discrepancy' };
+      console.log(`[redo] Shopify refund_discrepancy for ${orderName}/${sku}: net=$${result.product_refund}, shipping=$${result.shipping_refund}`);
+      return result;
+    }
+
+    // Last fallback: no Shopify refund records at all (return still open).
     // Use the original line item price as the product-only refund amount.
-    // This strips out any shipping component that Redo may have bundled in.
     const lineItem = (order.line_items || []).find(li => li.sku === sku);
     if (lineItem) {
       const originalPriceCents = Math.round(parseFloat(lineItem.price || 0) * 100) * (lineItem.quantity || 1);
-      const result = {
-        product_refund: originalPriceCents / 100,
-        shipping_refund: 0,
-        total_refund: originalPriceCents / 100,
-        source: 'line_item_price',
-      };
+      const result = { product_refund: originalPriceCents / 100, shipping_refund: 0, total_refund: originalPriceCents / 100, source: 'line_item_price' };
       console.log(`[redo] No Shopify refund for ${orderName}/${sku}, using line item price: $${result.product_refund}`);
       return result;
     }
