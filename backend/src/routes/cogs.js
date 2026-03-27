@@ -304,7 +304,7 @@ async function buildCogsData(periodStart, periodEnd, periodLabel) {
 
   const netSalesCents = grossSalesCents - totalReturnsCents;
   const shippingRevenueCents = shippingTotalCents - shippingRefundsCents;
-  const totalCollectedCents = netSalesCents + shippingRevenueCents + redoFeesCents;
+  const totalCollectedCents = netSalesCents + redoFeesCents; // excludes shipping to match Shopify "Total sales over time"
 
   // --- Totals (cents-based for revenue, float for cost fields) ---
   const totalRevenueCents = skuBreakdown.reduce((s, r) => s + Math.round(r.revenue * 100), 0);
@@ -807,7 +807,7 @@ router.get('/entries/by-sku', async (req, res) => {
     const shippingRefundsCents = (refundMap['shipping'] || { subtotalCents: 0 }).subtotalCents;
     const netSalesCents = grossSalesCents - totalReturnsCents;
     const shippingRevenueCents = shippingTotalCents - shippingRefundsCents;
-    const totalCollectedCents = netSalesCents + shippingRevenueCents + redoFeesCents;
+    const totalCollectedCents = netSalesCents + redoFeesCents; // excludes shipping to match Shopify "Total sales over time"
 
     const totalRevenueCents = skuBreakdown.reduce((s, r) => s + Math.round(r.revenue * 100), 0);
     const totalCogsCents = skuBreakdown.reduce((s, r) => s + Math.round(r.cogs * 100), 0);
