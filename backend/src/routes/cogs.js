@@ -1010,7 +1010,7 @@ router.get('/inventory/summary', async (req, res) => {
   console.log('[inventory/summary] start, store=', store);
 
   try {
-    // 1. Get all lots with remaining stock (join purchase_orders for supplier/location)
+    // ── 1a. GD stock: purchase_order_lines from germandrop supplier ──
     console.log('[inventory/summary] querying purchase_order_lines...');
     const { data: lots, error: lotsErr } = await supabase
       .from('purchase_order_lines')
@@ -1018,55 +1018,132 @@ router.get('/inventory/summary', async (req, res) => {
       .gt('quantity_remaining', 0);
     if (lotsErr) { console.error('[inventory/summary] lotsErr:', lotsErr.message); return res.status(500).json({ error: lotsErr.message }); }
     console.log('[inventory/summary] purchase_order_lines rows:', lots?.length);
-    if (!lots || lots.length === 0) return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
 
-    // 1b. Get stock adjustment deltas (physical count corrections)
+    // ── 1b. SCC stock: stock_adjustments (location='SCC') with per-location deltas ──
     console.log('[inventory/summary] querying stock_adjustments...');
-    const adjDeltas = await getStockAdjustmentDeltas();
-    console.log('[inventory/summary] adjDeltas keys:', Object.keys(adjDeltas).length);
+    const { data: adjRows, error: adjErr } = await supabase
+      .from('stock_adjustments')
+      .select('sku, delta, location');
+    if (adjErr) console.error('[inventory/summary] adjErr:', adjErr.message);
 
-    // Group by SKU (accumulate cost in cents), track per-location stock
-    const skuMap = {};
-    for (const lot of lots) {
-      if (!skuMap[lot.sku]) {
-        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set(), scc_stock: 0, gd_stock: 0 };
+    // Sum deltas by SKU and location
+    const sccAdjDeltas = {}; // { sku: totalDelta } for location='SCC'
+    const gdAdjDeltas = {};  // { sku: totalDelta } for location='GermanDrop'/'GD'
+    for (const row of (adjRows || [])) {
+      const loc = (row.location || 'SCC').toLowerCase();
+      if (loc.includes('gd') || loc.includes('germandrop') || loc.includes('german')) {
+        gdAdjDeltas[row.sku] = (gdAdjDeltas[row.sku] || 0) + row.delta;
+      } else {
+        sccAdjDeltas[row.sku] = (sccAdjDeltas[row.sku] || 0) + row.delta;
       }
+    }
+    console.log('[inventory/summary] SCC adj SKUs:', Object.keys(sccAdjDeltas).length, 'GD adj SKUs:', Object.keys(gdAdjDeltas).length);
+
+    // ── 1c. Sales since last SCC adjustment date (to subtract from SCC stock) ──
+    // Find latest SCC adjustment date
+    const sccAdjDates = (adjRows || [])
+      .filter(r => !(r.location || 'SCC').toLowerCase().includes('gd') && !(r.location || 'SCC').toLowerCase().includes('german'))
+      .map(r => r.adjustment_date)
+      .filter(Boolean);
+    const latestSccAdjDate = sccAdjDates.length > 0 ? sccAdjDates.sort().pop() : null;
+    console.log('[inventory/summary] latest SCC adjustment date:', latestSccAdjDate);
+
+    // Fetch SCC-fulfilled sales since adjustment date
+    let sccSalesSinceAdj = {};  // { sku: qty_sold }
+    if (latestSccAdjDate) {
+      const { data: sccSales } = await supabase
+        .from('shopify_sales')
+        .select('sku, quantity_sold, fulfillment_location')
+        .gt('order_date', latestSccAdjDate)
+        .eq('store', store)
+        .neq('sku', 'x-redo').neq('sku', 'shipping').neq('sku', 'tax');
+
+      for (const s of (sccSales || [])) {
+        // SCC-fulfilled = southern-cross-cargo or anything NOT manual/unfulfilled (default to SCC)
+        const fl = (s.fulfillment_location || '').toLowerCase();
+        const isGdFulfilled = fl.includes('oatlands') || fl === 'manual';
+        if (!isGdFulfilled) {
+          sccSalesSinceAdj[s.sku] = (sccSalesSinceAdj[s.sku] || 0) + s.quantity_sold;
+        }
+      }
+    }
+    console.log('[inventory/summary] SCC sales since adj SKUs:', Object.keys(sccSalesSinceAdj).length);
+
+    // ── Build unified SKU map ──
+    const skuMap = {};
+
+    const ensureSku = (sku, productName) => {
+      if (!skuMap[sku]) {
+        skuMap[sku] = { sku, product_name: productName || sku, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set(), scc_stock: 0, gd_stock: 0 };
+      }
+    };
+
+    // GD stock from purchase_order_lines (supplier=germandrop)
+    // SCC PO stock also added here for any non-GD supplier POs with remaining stock
+    for (const lot of (lots || [])) {
+      ensureSku(lot.sku, lot.product_name);
       const supplier = (lot.purchase_orders?.supplier || '').toLowerCase();
       const isGD = supplier.includes('germandrop') || supplier.includes('german_drop') || supplier === 'gd';
-      skuMap[lot.sku].quantity_remaining += lot.quantity_remaining;
-      skuMap[lot.sku].totalCostCents += toCents(lot.unit_cost) * lot.quantity_remaining;
       if (isGD) {
         skuMap[lot.sku].gd_stock += lot.quantity_remaining;
       } else {
         skuMap[lot.sku].scc_stock += lot.quantity_remaining;
       }
+      skuMap[lot.sku].totalCostCents += toCents(lot.unit_cost) * lot.quantity_remaining;
       if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
     }
 
-    // Apply stock adjustment deltas (apply proportionally to locations)
-    for (const [sku, delta] of Object.entries(adjDeltas)) {
-      if (skuMap[sku]) {
-        const fifoQty = skuMap[sku].quantity_remaining;
-        const avgCostCents = fifoQty > 0 ? skuMap[sku].totalCostCents / fifoQty : 0;
-        const newTotal = Math.max(0, fifoQty + delta);
-        // Apply delta proportionally across locations
-        if (fifoQty > 0 && newTotal !== fifoQty) {
-          const ratio = newTotal / fifoQty;
-          skuMap[sku].scc_stock = Math.max(0, Math.round(skuMap[sku].scc_stock * ratio));
-          skuMap[sku].gd_stock = Math.max(0, Math.round(skuMap[sku].gd_stock * ratio));
-          // Reconcile rounding: ensure sub-totals sum to total
-          const subTotal = skuMap[sku].scc_stock + skuMap[sku].gd_stock;
-          if (subTotal !== newTotal) {
-            // Adjust the larger pool
-            if (skuMap[sku].scc_stock >= skuMap[sku].gd_stock) {
-              skuMap[sku].scc_stock += (newTotal - subTotal);
-            } else {
-              skuMap[sku].gd_stock += (newTotal - subTotal);
-            }
-          }
+    // SCC stock from stock_adjustments (physical count) minus sales since count
+    for (const [sku, adjDelta] of Object.entries(sccAdjDeltas)) {
+      ensureSku(sku, sku);
+      const salesSince = sccSalesSinceAdj[sku] || 0;
+      const sccFromAdj = Math.max(0, adjDelta - salesSince);
+      skuMap[sku].scc_stock += sccFromAdj;
+    }
+
+    // GD stock adjustments (if any exist)
+    for (const [sku, adjDelta] of Object.entries(gdAdjDeltas)) {
+      ensureSku(sku, sku);
+      skuMap[sku].gd_stock = Math.max(0, skuMap[sku].gd_stock + adjDelta);
+    }
+
+    // Compute total quantity_remaining and recalc cost for adjustment-only SKUs
+    for (const s of Object.values(skuMap)) {
+      s.quantity_remaining = s.scc_stock + s.gd_stock;
+      // For adjustment-only SKUs (no PO lines), estimate cost from avg PO cost if available
+      if (s.totalCostCents === 0 && s.quantity_remaining > 0) {
+        // Look up avg cost from any PO line for this SKU
+        const skuLots = (lots || []).filter(l => l.sku === s.sku);
+        if (skuLots.length > 0) {
+          const avgCost = skuLots.reduce((sum, l) => sum + toCents(l.unit_cost), 0) / skuLots.length;
+          s.totalCostCents = Math.round(avgCost * s.quantity_remaining);
         }
-        skuMap[sku].quantity_remaining = newTotal;
-        skuMap[sku].totalCostCents = Math.round(avgCostCents * newTotal);
+      }
+    }
+
+    // Remove SKUs with 0 total stock
+    for (const sku of Object.keys(skuMap)) {
+      if (skuMap[sku].quantity_remaining <= 0) delete skuMap[sku];
+    }
+
+    if (Object.keys(skuMap).length === 0) {
+      return res.json({ skus: [], total_inventory_value: 0, total_retail_value: 0, total_skus: 0, total_units: 0 });
+    }
+
+    // Resolve product names for adjustment-only SKUs (no PO line → product_name = sku)
+    const needsName = Object.values(skuMap).filter(s => s.product_name === s.sku).map(s => s.sku);
+    if (needsName.length > 0) {
+      const { data: nameRows } = await supabase
+        .from('shopify_sales')
+        .select('sku, product_name')
+        .in('sku', needsName)
+        .limit(500);
+      const nameMap = {};
+      for (const r of (nameRows || [])) {
+        if (r.product_name && !nameMap[r.sku]) nameMap[r.sku] = r.product_name;
+      }
+      for (const s of Object.values(skuMap)) {
+        if (s.product_name === s.sku && nameMap[s.sku]) s.product_name = nameMap[s.sku];
       }
     }
 
