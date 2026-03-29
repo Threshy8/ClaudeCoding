@@ -2,9 +2,9 @@ import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useDemoMask } from '../contexts/DemoModeContext';
 import { BASE_URL, apiFetch, formatCurrency as _fmt } from '../utils';
 
-function getLocation(row) {
+function getLocations(row) {
   // Use locations from API if available, fallback to 'SCC'
-  return (row.locations && row.locations.length > 0) ? row.locations[0] : 'SCC';
+  return (row.locations && row.locations.length > 0) ? row.locations : ['SCC'];
 }
 
 const LOCATION_COLORS = {
@@ -23,6 +23,32 @@ function LocationBadge({ location }) {
       border: `1px solid ${c.border}`, whiteSpace: 'nowrap',
     }}>{location}</span>
   );
+}
+
+function StockBadges({ scc, gd, mn }) {
+  if (!scc && !gd) return null;
+  const badges = [];
+  if (scc > 0) {
+    const c = LOCATION_COLORS['SCC'];
+    badges.push(
+      <span key="scc" style={{
+        display: 'inline-flex', alignItems: 'center', gap: 3,
+        padding: '1px 7px', borderRadius: 8, fontSize: 10, fontWeight: 600,
+        background: c.bg, color: c.color, border: `1px solid ${c.border}`,
+      }}>SCC {mn(scc)}</span>
+    );
+  }
+  if (gd > 0) {
+    const c = LOCATION_COLORS['GermanDrop'];
+    badges.push(
+      <span key="gd" style={{
+        display: 'inline-flex', alignItems: 'center', gap: 3,
+        padding: '1px 7px', borderRadius: 8, fontSize: 10, fontWeight: 600,
+        background: c.bg, color: c.color, border: `1px solid ${c.border}`,
+      }}>GD {mn(gd)}</span>
+    );
+  }
+  return <span style={{ display: 'inline-flex', gap: 4, marginLeft: 6 }}>{badges}</span>;
 }
 
 function LowStockBadge() {
@@ -199,9 +225,11 @@ export default function InventoryTab() {
     const map = {};
     for (const row of filtered) {
       const family = extractFamily(row.product_name);
-      if (!map[family]) map[family] = { name: family, skus: [], totalUnits: 0, totalSold: 0, totalInvValue: 0, totalRetValue: 0, totalOriginal: 0, hasLowStock: false };
+      if (!map[family]) map[family] = { name: family, skus: [], totalUnits: 0, totalSold: 0, totalInvValue: 0, totalRetValue: 0, totalOriginal: 0, hasLowStock: false, totalScc: 0, totalGd: 0 };
       map[family].skus.push(row);
       map[family].totalUnits += row.quantity_remaining;
+      map[family].totalScc += (row.scc_stock || 0);
+      map[family].totalGd += (row.gd_stock || 0);
       map[family].totalSold += row.units_sold_this_month;
       map[family].totalInvValue += row.inventory_value;
       map[family].totalRetValue += row.retail_value;
@@ -340,13 +368,16 @@ export default function InventoryTab() {
                         <td>
                           {/* Show unique locations */}
                           <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                            {[...new Set(fam.skus.map(s => getLocation(s)))].map(loc => (
+                            {[...new Set(fam.skus.flatMap(s => getLocations(s)))].map(loc => (
                               <LocationBadge key={loc} location={loc} />
                             ))}
                           </span>
                         </td>
                         <td className="text-right">
-                          <StockBar current={fam.totalUnits} original={fam.totalOriginal} />
+                          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                            <StockBar current={fam.totalUnits} original={fam.totalOriginal} />
+                            <StockBadges scc={fam.totalScc} gd={fam.totalGd} mn={mn} />
+                          </span>
                         </td>
                         <td className="text-right">
                           <SoldArrow value={mn(fam.totalSold)} />
@@ -374,12 +405,21 @@ export default function InventoryTab() {
                               {row.low_stock && <LowStockBadge />}
                             </div>
                           </td>
-                          <td><LocationBadge location={getLocation(row)} /></td>
+                          <td>
+                            <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                              {getLocations(row).map(loc => (
+                                <LocationBadge key={loc} location={loc} />
+                              ))}
+                            </span>
+                          </td>
                           <td className="text-right">
-                            <StockBar
-                              current={mn(row.quantity_remaining)}
-                              original={row.quantity_remaining + row.units_sold_this_month}
-                            />
+                            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                              <StockBar
+                                current={mn(row.quantity_remaining)}
+                                original={row.quantity_remaining + row.units_sold_this_month}
+                              />
+                              <StockBadges scc={row.scc_stock} gd={row.gd_stock} mn={mn} />
+                            </span>
                           </td>
                           <td className="text-right">
                             <SoldArrow value={mn(row.units_sold_this_month)} />

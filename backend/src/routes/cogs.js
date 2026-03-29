@@ -1010,11 +1010,11 @@ router.get('/inventory/summary', async (req, res) => {
   console.log('[inventory/summary] start, store=', store);
 
   try {
-    // 1. Get all lots with remaining stock
+    // 1. Get all lots with remaining stock (join purchase_orders for supplier/location)
     console.log('[inventory/summary] querying purchase_order_lines...');
     const { data: lots, error: lotsErr } = await supabase
       .from('purchase_order_lines')
-      .select('sku, product_name, unit_cost, quantity_remaining, po_number')
+      .select('sku, product_name, unit_cost, quantity_remaining, po_number, purchase_orders(supplier)')
       .gt('quantity_remaining', 0);
     if (lotsErr) { console.error('[inventory/summary] lotsErr:', lotsErr.message); return res.status(500).json({ error: lotsErr.message }); }
     console.log('[inventory/summary] purchase_order_lines rows:', lots?.length);
@@ -1025,24 +1025,48 @@ router.get('/inventory/summary', async (req, res) => {
     const adjDeltas = await getStockAdjustmentDeltas();
     console.log('[inventory/summary] adjDeltas keys:', Object.keys(adjDeltas).length);
 
-    // Group by SKU (accumulate cost in cents)
+    // Group by SKU (accumulate cost in cents), track per-location stock
     const skuMap = {};
     for (const lot of lots) {
       if (!skuMap[lot.sku]) {
-        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set() };
+        skuMap[lot.sku] = { sku: lot.sku, product_name: lot.product_name, quantity_remaining: 0, totalCostCents: 0, po_numbers: new Set(), scc_stock: 0, gd_stock: 0 };
       }
+      const supplier = (lot.purchase_orders?.supplier || '').toLowerCase();
+      const isGD = supplier.includes('germandrop') || supplier.includes('german_drop') || supplier === 'gd';
       skuMap[lot.sku].quantity_remaining += lot.quantity_remaining;
       skuMap[lot.sku].totalCostCents += toCents(lot.unit_cost) * lot.quantity_remaining;
+      if (isGD) {
+        skuMap[lot.sku].gd_stock += lot.quantity_remaining;
+      } else {
+        skuMap[lot.sku].scc_stock += lot.quantity_remaining;
+      }
       if (lot.po_number) skuMap[lot.sku].po_numbers.add(lot.po_number);
     }
 
-    // Apply stock adjustment deltas
+    // Apply stock adjustment deltas (apply proportionally to locations)
     for (const [sku, delta] of Object.entries(adjDeltas)) {
       if (skuMap[sku]) {
         const fifoQty = skuMap[sku].quantity_remaining;
         const avgCostCents = fifoQty > 0 ? skuMap[sku].totalCostCents / fifoQty : 0;
-        skuMap[sku].quantity_remaining = Math.max(0, fifoQty + delta);
-        skuMap[sku].totalCostCents = Math.round(avgCostCents * skuMap[sku].quantity_remaining);
+        const newTotal = Math.max(0, fifoQty + delta);
+        // Apply delta proportionally across locations
+        if (fifoQty > 0 && newTotal !== fifoQty) {
+          const ratio = newTotal / fifoQty;
+          skuMap[sku].scc_stock = Math.max(0, Math.round(skuMap[sku].scc_stock * ratio));
+          skuMap[sku].gd_stock = Math.max(0, Math.round(skuMap[sku].gd_stock * ratio));
+          // Reconcile rounding: ensure sub-totals sum to total
+          const subTotal = skuMap[sku].scc_stock + skuMap[sku].gd_stock;
+          if (subTotal !== newTotal) {
+            // Adjust the larger pool
+            if (skuMap[sku].scc_stock >= skuMap[sku].gd_stock) {
+              skuMap[sku].scc_stock += (newTotal - subTotal);
+            } else {
+              skuMap[sku].gd_stock += (newTotal - subTotal);
+            }
+          }
+        }
+        skuMap[sku].quantity_remaining = newTotal;
+        skuMap[sku].totalCostCents = Math.round(avgCostCents * newTotal);
       }
     }
 
@@ -1086,10 +1110,18 @@ router.get('/inventory/summary', async (req, res) => {
       const avgUnitCostCents = s.quantity_remaining > 0 ? s.totalCostCents / s.quantity_remaining : 0;
       const sp = salePriceMap[s.sku];
       const avgSalePriceCents = sp && sp.totalQty > 0 ? sp.totalRevCents / sp.totalQty : 0;
+      const locations = [];
+      if (s.scc_stock > 0) locations.push('SCC');
+      if (s.gd_stock > 0) locations.push('GermanDrop');
+      if (locations.length === 0) locations.push('SCC'); // default
+
       return {
         sku: s.sku,
         product_name: s.product_name,
         quantity_remaining: s.quantity_remaining,
+        scc_stock: s.scc_stock,
+        gd_stock: s.gd_stock,
+        locations,
         unit_cost: Math.round(avgUnitCostCents) / 100,
         inventory_value: s.totalCostCents / 100,
         avg_sale_price: Math.round(avgSalePriceCents) / 100,
