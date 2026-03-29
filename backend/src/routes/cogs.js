@@ -1133,6 +1133,7 @@ router.get('/inventory/summary', async (req, res) => {
     // Resolve product names for adjustment-only SKUs (no PO line → product_name = sku)
     const needsName = Object.values(skuMap).filter(s => s.product_name === s.sku).map(s => s.sku);
     if (needsName.length > 0) {
+      // Try shopify_sales first, then purchase_order_lines
       const { data: nameRows } = await supabase
         .from('shopify_sales')
         .select('sku, product_name')
@@ -1141,6 +1142,18 @@ router.get('/inventory/summary', async (req, res) => {
       const nameMap = {};
       for (const r of (nameRows || [])) {
         if (r.product_name && !nameMap[r.sku]) nameMap[r.sku] = r.product_name;
+      }
+      // Fill gaps from purchase_order_lines
+      const stillMissing = needsName.filter(s => !nameMap[s]);
+      if (stillMissing.length > 0) {
+        const { data: poNameRows } = await supabase
+          .from('purchase_order_lines')
+          .select('sku, product_name')
+          .in('sku', stillMissing)
+          .limit(500);
+        for (const r of (poNameRows || [])) {
+          if (r.product_name && !nameMap[r.sku]) nameMap[r.sku] = r.product_name;
+        }
       }
       for (const s of Object.values(skuMap)) {
         if (s.product_name === s.sku && nameMap[s.sku]) s.product_name = nameMap[s.sku];
