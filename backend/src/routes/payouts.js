@@ -143,8 +143,22 @@ router.get('/', async (req, res) => {
       summary,
     });
   } catch (err) {
-    console.error('[Payouts] Error:', err.message);
-    res.status(500).json({ error: err.message });
+    const status = err.response?.status;
+    const detail = err.response?.data?.errors || err.message;
+    console.error(`[Payouts] Error (HTTP ${status || 'N/A'}):`, detail);
+
+    // If it's a scope/auth issue (403) or not-found (404), return empty payouts
+    // so the frontend gracefully falls back to revenue calculation
+    if (status === 403 || status === 404 || status === 401) {
+      console.warn('[Payouts] Likely missing scope read_shopify_payments_payouts — returning empty');
+      return res.json({
+        payouts: [],
+        summary: { payout_count: 0, total_amount: 0, charges_gross: 0, charges_fee: 0, charges_net: 0, refunds_gross: 0, refunds_fee: 0, adjustments_gross: 0, reserved_funds: 0 },
+        warning: `Shopify Payments API returned ${status}. Ensure your app has the read_shopify_payments_payouts scope.`,
+      });
+    }
+
+    res.status(500).json({ error: detail });
   }
 });
 

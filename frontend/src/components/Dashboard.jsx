@@ -212,9 +212,10 @@ export default function Dashboard({ dateRange }) {
   const inventoryValue = inventory?.total_inventory_value ?? skuData.total_inventory_value ?? 0;
 
   // Payout data (from Shopify Payments API)
-  const hasPayout = payoutData?.summary?.payout_count > 0;
+  // Only show payout view if we actually have payouts with a non-zero amount
   const payoutSummary = payoutData?.summary || {};
   const payoutTotal = payoutSummary.total_amount || 0;
+  const hasPayout = payoutData?.summary?.payout_count > 0 && payoutTotal !== 0;
   const payoutChargesGross = payoutSummary.charges_gross || 0;
   const payoutRefunds = payoutSummary.refunds_gross || 0;
   const payoutFees = payoutSummary.charges_fee || 0;
