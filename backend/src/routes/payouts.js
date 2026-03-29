@@ -61,6 +61,32 @@ async function shopifyGet(url, token, retries = 3) {
   }
 }
 
+// Fetch all balance transactions for a payout (paginated)
+async function fetchPayoutTransactions(storeUrl, token, payoutId) {
+  const txns = [];
+  let url = `${storeUrl}/admin/api/2024-01/shopify_payments/balance/transactions.json?payout_id=${payoutId}&limit=250`;
+
+  let pageCount = 0;
+  while (url) {
+    if (pageCount > 0) await sleep(500);
+    const response = await shopifyGet(url, token);
+    pageCount++;
+
+    const batch = response.data.transactions || [];
+    txns.push(...batch);
+
+    const linkHeader = response.headers['link'];
+    if (linkHeader && linkHeader.includes('rel="next"')) {
+      const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+      url = match ? match[1] : null;
+    } else {
+      url = null;
+    }
+  }
+
+  return txns;
+}
+
 // GET /api/payouts?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
 router.get('/', async (req, res) => {
   try {
@@ -98,13 +124,12 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // Aggregate payout summary across all payouts in range
+    // Fetch transactions for each payout to build the breakdown
     const summary = {
       payout_count: payouts.length,
-      total_amount: 0,        // net payout to bank
+      total_amount: 0,
       charges_gross: 0,
       charges_fee: 0,
-      charges_net: 0,
       refunds_gross: 0,
       refunds_fee: 0,
       adjustments_gross: 0,
@@ -113,16 +138,40 @@ router.get('/', async (req, res) => {
 
     for (const p of payouts) {
       summary.total_amount += parseFloat(p.amount || 0);
-      // summary fields from payout.summary if present
-      const s = p.summary;
-      if (s) {
-        summary.charges_gross += parseFloat(s.charges_gross || 0);
-        summary.charges_fee += parseFloat(s.charges_fee || 0);
-        summary.charges_net += parseFloat(s.charges_net || 0);
-        summary.refunds_gross += parseFloat(s.refunds_gross || 0);
-        summary.refunds_fee += parseFloat(s.refunds_fee || 0);
-        summary.adjustments_gross += parseFloat(s.adjustments_gross || 0);
-        summary.reserved_funds += parseFloat(s.reserved_funds || 0);
+
+      // Fetch balance transactions for this payout
+      try {
+        const txns = await fetchPayoutTransactions(storeUrl, token, p.id);
+        for (const t of txns) {
+          const amount = parseFloat(t.amount || 0);
+          const fee = parseFloat(t.fee || 0);
+          switch (t.type) {
+            case 'charge':
+              summary.charges_gross += amount + fee; // gross = net + fee
+              summary.charges_fee += fee;
+              break;
+            case 'refund':
+              summary.refunds_gross += amount; // refunds are negative
+              summary.refunds_fee += fee;
+              break;
+            case 'adjustment':
+              summary.adjustments_gross += amount;
+              break;
+            case 'reserve_transfer':
+            case 'reserved_funds':
+              summary.reserved_funds += amount;
+              break;
+            default:
+              // payout type = the payout itself, skip
+              if (t.type !== 'payout') {
+                summary.adjustments_gross += amount;
+              }
+              break;
+          }
+        }
+      } catch (txnErr) {
+        console.warn(`[Payouts] Failed to fetch transactions for payout ${p.id}:`, txnErr.message);
+        // Continue without breakdown for this payout
       }
     }
 
@@ -153,7 +202,7 @@ router.get('/', async (req, res) => {
       console.warn('[Payouts] Likely missing scope read_shopify_payments_payouts — returning empty');
       return res.json({
         payouts: [],
-        summary: { payout_count: 0, total_amount: 0, charges_gross: 0, charges_fee: 0, charges_net: 0, refunds_gross: 0, refunds_fee: 0, adjustments_gross: 0, reserved_funds: 0 },
+        summary: { payout_count: 0, total_amount: 0, charges_gross: 0, charges_fee: 0, refunds_gross: 0, refunds_fee: 0, adjustments_gross: 0, reserved_funds: 0 },
         warning: `Shopify Payments API returned ${status}. Ensure your app has the read_shopify_payments_payouts scope.`,
       });
     }
