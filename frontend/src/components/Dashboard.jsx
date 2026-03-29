@@ -123,6 +123,7 @@ export default function Dashboard({ dateRange }) {
   const [skuData, setSkuData] = useState(null);
   const [inventory, setInventory] = useState(null);
   const [freight, setFreight] = useState(null);
+  const [payoutData, setPayoutData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isFifo, setIsFifo] = useState(false);
@@ -169,11 +170,15 @@ export default function Dashboard({ dateRange }) {
     if (dateRange.end)   freightParams.set('end_date', dateRange.end);
     const freightPromise = apiFetch(`/api/3pl/auspost/summary?${freightParams}`).catch(() => null);
 
-    Promise.all([fifoPromise, invPromise, freightPromise])
-      .then(([sku, inv, freight]) => {
+    const payoutParams = new URLSearchParams({ start_date: dateRange.start, end_date: dateRange.end });
+    const payoutPromise = apiFetch(`/api/payouts?${payoutParams}`).catch(() => null);
+
+    Promise.all([fifoPromise, invPromise, freightPromise, payoutPromise])
+      .then(([sku, inv, freight, payouts]) => {
         setSkuData(sku);
         setInventory(inv);
         setFreight(freight);
+        setPayoutData(payouts);
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -206,6 +211,16 @@ export default function Dashboard({ dateRange }) {
 
   const inventoryValue = inventory?.total_inventory_value ?? skuData.total_inventory_value ?? 0;
 
+  // Payout data (from Shopify Payments API)
+  const hasPayout = payoutData?.summary?.payout_count > 0;
+  const payoutSummary = payoutData?.summary || {};
+  const payoutTotal = payoutSummary.total_amount || 0;
+  const payoutChargesGross = payoutSummary.charges_gross || 0;
+  const payoutRefunds = payoutSummary.refunds_gross || 0;
+  const payoutFees = payoutSummary.charges_fee || 0;
+  const payoutAdjustments = payoutSummary.adjustments_gross || 0;
+  const payoutReserved = payoutSummary.reserved_funds || 0;
+
   const rangeLabel = fmtRangeLabel(dateRange);
 
   const hasCostData = rows.some(r => (r.cogs || 0) > 0 || (r.avg_unit_cost || 0) > 0);
@@ -231,9 +246,9 @@ export default function Dashboard({ dateRange }) {
     <div>
       <div className="kpi-grid">
         <div className="kpi-card">
-          <div className="kpi-label">REVENUE</div>
-          <div className="kpi-value">{mc(_fmt(totalCollected))}</div>
-          <div className="kpi-sub">{rangeLabel}</div>
+          <div className="kpi-label">{hasPayout ? 'PAYOUTS' : 'REVENUE'}</div>
+          <div className="kpi-value">{mc(_fmt(hasPayout ? payoutTotal : totalCollected))}</div>
+          <div className="kpi-sub">{hasPayout ? `${payoutSummary.payout_count} payout${payoutSummary.payout_count !== 1 ? 's' : ''} · ${rangeLabel}` : rangeLabel}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">True COGS</div>
@@ -317,6 +332,47 @@ export default function Dashboard({ dateRange }) {
           )}
         </div>
       </div>
+
+      {/* Payout Breakdown (from Shopify Payments) */}
+      {hasPayout && (
+        <div className="card sales-breakdown">
+          <div className="card-title">Payout Breakdown — {rangeLabel}</div>
+          <div className="sb-rows">
+            <div className="sb-row">
+              <span className="sb-label">Charges (Gross)</span>
+              <span className="sb-value">{mc(_fmt(payoutChargesGross))}</span>
+            </div>
+            {payoutRefunds !== 0 && (
+              <div className="sb-row sb-negative">
+                <span className="sb-label">Refunds</span>
+                <span className="sb-value">−{mc(_fmt(Math.abs(payoutRefunds)))}</span>
+              </div>
+            )}
+            {payoutFees !== 0 && (
+              <div className="sb-row sb-negative">
+                <span className="sb-label">Processing Fees</span>
+                <span className="sb-value">−{mc(_fmt(Math.abs(payoutFees)))}</span>
+              </div>
+            )}
+            {payoutAdjustments !== 0 && (
+              <div className="sb-row">
+                <span className="sb-label">Adjustments</span>
+                <span className="sb-value">{mc(_fmt(payoutAdjustments))}</span>
+              </div>
+            )}
+            {payoutReserved !== 0 && (
+              <div className="sb-row sb-negative">
+                <span className="sb-label">Reserved Funds</span>
+                <span className="sb-value">−{mc(_fmt(Math.abs(payoutReserved)))}</span>
+              </div>
+            )}
+            <div className="sb-row sb-total">
+              <span className="sb-label">Net Payout</span>
+              <span className="sb-value">{mc(_fmt(payoutTotal))}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
