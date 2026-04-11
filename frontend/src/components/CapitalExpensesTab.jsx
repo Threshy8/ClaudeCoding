@@ -154,8 +154,7 @@ export default function CapitalExpensesTab() {
         return;
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploading]);
+  }, [uploading]); // eslint-disable-line
 
   // Drag & drop
   const handleDragOver = (e) => { e.preventDefault(); setDragOver(true); };
