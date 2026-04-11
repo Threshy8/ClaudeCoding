@@ -380,6 +380,30 @@ router.post('/germandrop/order-costs', async (req, res) => {
   res.json(data);
 });
 
+// ── GET /api/purchases/germandrop/balance ────────────────────────────────────
+// Returns the current GermanDrop wallet balance (topups - order costs)
+router.get('/germandrop/balance', async (req, res) => {
+  try {
+    const { data: topups, error: tErr } = await supabase
+      .from('germandrop_topups')
+      .select('amount_aud');
+    if (tErr) return res.status(500).json({ error: tErr.message });
+
+    const { data: costs, error: cErr } = await supabase
+      .from('germandrop_order_costs')
+      .select('shipping_cost');
+    if (cErr) return res.status(500).json({ error: cErr.message });
+
+    const totalTopups = (topups || []).reduce((s, t) => s + (parseFloat(t.amount_aud) || 0), 0);
+    const totalSpent = (costs || []).reduce((s, c) => s + (parseFloat(c.shipping_cost) || 0), 0);
+    const balance = totalTopups - totalSpent;
+
+    res.json({ balance_aud: Math.round(balance * 100) / 100, total_topups: totalTopups, total_spent: totalSpent });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/purchases/recompute-cogs ────────────────────────────────────────
 // Manually trigger full COGS recompute (after editing lots)
 router.post('/recompute-cogs', async (req, res) => {

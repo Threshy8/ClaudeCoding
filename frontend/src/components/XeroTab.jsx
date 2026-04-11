@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { getXeroStatus, getXeroPnl, disconnectXero, getCapitalExpenses } from '../api';
+import { getXeroStatus, getXeroPnl, disconnectXero, getCapitalExpenses, getGermanDropBalance } from '../api';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -26,6 +26,7 @@ export default function XeroTab() {
   const [dates, setDates] = useState(defaultDateRange);
   const [successMsg, setSuccessMsg] = useState(null);
   const [capexItems, setCapexItems] = useState([]);
+  const [gdBalance, setGdBalance] = useState(null);
 
   // Check for ?connected=true in URL on mount
   useEffect(() => {
@@ -59,12 +60,14 @@ export default function XeroTab() {
     setPnlLoading(true);
     setPnlError(null);
     try {
-      const [data, capex] = await Promise.all([
+      const [data, capex, gd] = await Promise.all([
         getXeroPnl(dates.start, dates.end),
         getCapitalExpenses(dates.start, dates.end).catch(() => []),
+        getGermanDropBalance().catch(() => null),
       ]);
       setPnlData(data);
       setCapexItems(capex);
+      setGdBalance(gd);
     } catch (err) {
       setPnlError(err.message);
     } finally {
@@ -167,7 +170,7 @@ export default function XeroTab() {
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>Loading P&amp;L data...</div>
       )}
 
-      {pnlData && <PnlTable data={pnlData} capexItems={capexItems} />}
+      {pnlData && <PnlTable data={pnlData} capexItems={capexItems} gdBalance={gdBalance} />}
     </div>
   );
 }
@@ -177,12 +180,19 @@ function pctOf(amount, revenue) {
   return ((amount / revenue) * 100).toFixed(1) + '%';
 }
 
-function PnlTable({ data, capexItems = [] }) {
+function PnlTable({ data, capexItems = [], gdBalance = null }) {
   const revenue = data.tradingIncome.total;
   const capexTotal = capexItems.reduce((s, i) => s + Number(i.amount || 0), 0);
   const hasCapex = capexTotal > 0;
   const adjustedCos = data.costOfSales.total - capexTotal;
   const adjustedGrossProfit = revenue - adjustedCos;
+
+  const gdBalanceAud = gdBalance && gdBalance.balance_aud > 0 ? Math.round(gdBalance.balance_aud * 100) / 100 : 0;
+  const hasGd = gdBalanceAud > 0;
+  const hasAdjustments = hasCapex || hasGd;
+  const totalDeductions = capexTotal + gdBalanceAud;
+  const trueCos = data.costOfSales.total - totalDeductions;
+  const trueGrossProfit = revenue - trueCos;
 
   return (
     <div style={styles.card}>
@@ -233,23 +243,54 @@ function PnlTable({ data, capexItems = [] }) {
                 <td style={{ padding: '6px 12px', fontSize: 13, fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>{formatCurrency(-capexTotal)}</td>
                 <td style={{ ...pctStyle, fontWeight: 600, color: 'var(--green)' }}>{pctOf(capexTotal, revenue)}</td>
               </tr>
-              <tr style={{ borderTop: '1px solid var(--border-light)' }}>
-                <td style={{ padding: '8px 12px 8px 16px', fontSize: 13, fontWeight: 700 }}>Adjusted Cost of Sales</td>
-                <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(adjustedCos)}</td>
-                <td style={{ ...pctStyle, fontWeight: 700 }}>{pctOf(adjustedCos, revenue)}</td>
+              {!hasGd && (
+                <tr style={{ borderTop: '1px solid var(--border-light)' }}>
+                  <td style={{ padding: '8px 12px 8px 16px', fontSize: 13, fontWeight: 700 }}>Adjusted Cost of Sales</td>
+                  <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(adjustedCos)}</td>
+                  <td style={{ ...pctStyle, fontWeight: 700 }}>{pctOf(adjustedCos, revenue)}</td>
+                </tr>
+              )}
+            </>
+          )}
+
+          {/* GermanDrop Wallet */}
+          {hasGd && (
+            <>
+              <tr>
+                <td colSpan={3} style={{ padding: '10px 12px 4px 24px', fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
+                  Less: Prepaid Balances
+                  <span
+                    title="Funds loaded into GermanDrop wallet recorded as COGS but not yet spent on inventory"
+                    style={{ display: 'inline-block', marginLeft: 6, width: 15, height: 15, borderRadius: '50%', background: 'var(--bg-alt)', border: '1px solid var(--border)', textAlign: 'center', lineHeight: '14px', fontSize: 10, color: 'var(--text-muted)', cursor: 'help', verticalAlign: 'middle' }}
+                  >?</span>
+                </td>
+              </tr>
+              <tr>
+                <td style={{ padding: '4px 12px 4px 40px', fontSize: 12, color: 'var(--text-muted)' }}>GermanDrop Wallet (unspent)</td>
+                <td style={{ padding: '4px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>{formatCurrency(-gdBalanceAud)}</td>
+                <td style={{ ...pctStyle, fontSize: 11, color: 'var(--text-dim)' }}>{pctOf(gdBalanceAud, revenue)}</td>
               </tr>
             </>
+          )}
+
+          {/* True Adjusted COGS (when both capex and GD exist, or just GD) */}
+          {hasAdjustments && (
+            <tr style={{ borderTop: '1px solid var(--border-light)' }}>
+              <td style={{ padding: '8px 12px 8px 16px', fontSize: 13, fontWeight: 700 }}>True Adjusted COGS</td>
+              <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(trueCos)}</td>
+              <td style={{ ...pctStyle, fontWeight: 700 }}>{pctOf(trueCos, revenue)}</td>
+            </tr>
           )}
 
           {/* Gross Profit */}
           <HighlightRow label="Gross Profit (Xero)" amount={data.grossProfit} pct={pctOf(data.grossProfit, revenue)} />
 
-          {/* Adjusted Gross Profit */}
-          {hasCapex && (
+          {/* True Adjusted Gross Profit */}
+          {hasAdjustments && (
             <tr style={{ background: 'rgba(42,122,75,0.07)' }}>
-              <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>Adjusted Gross Profit</td>
-              <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>{formatCurrency(adjustedGrossProfit)}</td>
-              <td style={{ ...pctStyle, fontWeight: 700, fontSize: 13, borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>{pctOf(adjustedGrossProfit, revenue)}</td>
+              <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>True Adjusted Gross Profit</td>
+              <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>{formatCurrency(trueGrossProfit)}</td>
+              <td style={{ ...pctStyle, fontWeight: 700, fontSize: 13, borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>{pctOf(trueGrossProfit, revenue)}</td>
             </tr>
           )}
 

@@ -67,6 +67,9 @@ export const deleteCapitalExpense = (id) =>
 export const parseCapitalReceipt = ({ text, image_base64, media_type }) =>
   request('/api/capital-expenses/parse-receipt', { method: 'POST', body: JSON.stringify({ text, image_base64, media_type }) });
 
+// GermanDrop wallet
+export const getGermanDropBalance = () => request('/api/purchases/germandrop/balance');
+
 // Xero
 export const getXeroStatus = () => request('/api/xero/status');
 export const getXeroPnl = (startDate, endDate) =>
