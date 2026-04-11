@@ -4,7 +4,7 @@ const supabase = require('../db/supabase');
 
 const router = express.Router();
 
-const SCOPES = 'openid profile email accounting.reports.read accounting.settings.read offline_access';
+const SCOPES = 'openid profile email offline_access accounting.reports.profitandloss.read accounting.settings.read';
 
 function createXeroClient() {
   return new XeroClient({
