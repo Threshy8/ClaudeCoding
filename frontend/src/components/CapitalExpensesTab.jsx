@@ -279,7 +279,12 @@ export default function CapitalExpensesTab() {
                 <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>Extracting details with AI</div>
               </div>
             ) : preview ? (
-              <div style={st.dropContent}>
+              <div style={{ ...st.dropContent, position: 'relative', width: '100%' }}>
+                <button
+                  onClick={() => setPreview(null)}
+                  style={st.previewCloseBtn}
+                  title="Clear image"
+                >x</button>
                 <img src={preview} alt="Receipt preview" style={{ maxWidth: '100%', maxHeight: 160, borderRadius: 6, objectFit: 'contain', marginBottom: 8 }} />
                 <div style={{ fontSize: 12, color: 'var(--green)', fontWeight: 600 }}>Extracted — review the form on the left</div>
                 <button
@@ -443,6 +448,13 @@ const st = {
   linkBtn: {
     background: 'none', border: 'none', cursor: 'pointer', fontSize: 12,
     color: 'var(--text-muted)', textDecoration: 'underline', padding: 0,
+  },
+  previewCloseBtn: {
+    position: 'absolute', top: -4, right: -4, width: 22, height: 22, borderRadius: '50%',
+    background: 'var(--bg-card)', border: '1px solid var(--border)', cursor: 'pointer',
+    fontSize: 12, lineHeight: '20px', textAlign: 'center', padding: 0,
+    color: 'var(--text-muted)', boxShadow: 'var(--shadow-xs)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   tableCard: {
     background: 'var(--bg-card)', border: '1px solid var(--border)',
