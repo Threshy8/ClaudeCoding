@@ -180,6 +180,8 @@ function pctOf(amount, revenue) {
   return ((amount / revenue) * 100).toFixed(1) + '%';
 }
 
+const GD_USD_TO_AUD = 1.45;
+
 function PnlTable({ data, capexItems = [], gdBalance = null }) {
   const revenue = data.tradingIncome.total;
   const capexTotal = capexItems.reduce((s, i) => s + Number(i.amount || 0), 0);
@@ -187,7 +189,8 @@ function PnlTable({ data, capexItems = [], gdBalance = null }) {
   const adjustedCos = data.costOfSales.total - capexTotal;
   const adjustedGrossProfit = revenue - adjustedCos;
 
-  const gdBalanceAud = gdBalance && gdBalance.balance_aud > 0 ? Math.round(gdBalance.balance_aud * 100) / 100 : 0;
+  const gdBalanceUsd = gdBalance && gdBalance.balance_aud > 0 ? gdBalance.balance_aud : 0;
+  const gdBalanceAud = Math.round(gdBalanceUsd * GD_USD_TO_AUD * 100) / 100;
   const hasGd = gdBalanceAud > 0;
   const hasAdjustments = hasCapex || hasGd;
   const totalDeductions = capexTotal + gdBalanceAud;
@@ -266,7 +269,7 @@ function PnlTable({ data, capexItems = [], gdBalance = null }) {
                 </td>
               </tr>
               <tr>
-                <td style={{ padding: '4px 12px 4px 40px', fontSize: 12, color: 'var(--text-muted)' }}>GermanDrop Wallet (unspent)</td>
+                <td style={{ padding: '4px 12px 4px 40px', fontSize: 12, color: 'var(--text-muted)' }}>GermanDrop Wallet (unspent){gdBalanceUsd > 0 && <span style={{ color: 'var(--text-dim)', marginLeft: 6, fontSize: 11 }}>US${gdBalanceUsd.toFixed(2)} x {GD_USD_TO_AUD}</span>}</td>
                 <td style={{ padding: '4px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>{formatCurrency(-gdBalanceAud)}</td>
                 <td style={{ ...pctStyle, fontSize: 11, color: 'var(--text-dim)' }}>{pctOf(gdBalanceAud, revenue)}</td>
               </tr>
