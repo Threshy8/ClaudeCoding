@@ -119,3 +119,16 @@ create policy "Allow all for anon" on shopify_refunds for all using (true) with 
 --   ('ROL-SUB-124060', 'Rolex Submariner 124060', 1, 15200.00, '2026-01-15', 'Grey Street Watches, inv #1001'),
 --   ('ROL-DJ-126300',  'Rolex Datejust 126300',   2, 8400.00,  '2026-01-20', 'Sydney Dealer, inv #2204'),
 --   ('AP-ROO-15400',   'AP Royal Oak 15400',       1, 28500.00, '2026-02-01', 'Direct purchase');
+
+-- ============================================================
+-- Xero OAuth tokens
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS xero_tokens (
+  id SERIAL PRIMARY KEY,
+  access_token TEXT,
+  refresh_token TEXT,
+  expires_at TIMESTAMP,
+  tenant_id TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);

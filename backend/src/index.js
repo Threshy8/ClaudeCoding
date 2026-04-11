@@ -19,6 +19,7 @@ const fulfillmentRouter = require('./routes/fulfillment');
 const auspostRouter = require('./routes/auspost');
 const redoRouter = require('./routes/redo');
 const payoutsRouter = require('./routes/payouts');
+const xeroRouter = require('./routes/xero');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -38,6 +39,7 @@ app.use('/api/fulfillment', fulfillmentRouter);
 app.use('/api/3pl/auspost', auspostRouter);
 app.use('/api/sync/redo', redoRouter);
 app.use('/api/payouts', payoutsRouter);
+app.use('/api/xero', xeroRouter);
 
 // Root health check (Railway checks GET /)
 app.get('/', (req, res) => res.json({ status: 'ok' }));

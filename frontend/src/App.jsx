@@ -7,12 +7,13 @@ import FulfillmentTab from './components/FulfillmentTab';
 import RefundsTab from './components/RefundsTab';
 import InventoryTab from './components/InventoryTab';
 import ForecastTab from './components/ForecastTab';
+import XeroTab from './components/XeroTab';
 import DateRangePicker from './components/DateRangePicker';
 import { DemoModeContext } from './contexts/DemoModeContext';
 import { syncShopify, syncRedo } from './api';
 import './App.css';
 
-const TABS = ['Dashboard', 'Inventory', 'Forecast', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Refunds', 'Journal Export'];
+const TABS = ['Dashboard', 'Inventory', 'Forecast', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Refunds', 'Journal Export', 'Xero'];
 const APP_PASSWORD = process.env.REACT_APP_PASSWORD || 'watchbox2024';
 
 function defaultRange() {
@@ -204,6 +205,7 @@ export default function App() {
           {activeTab === '3PL Costs'      && <FulfillmentTab dateRange={dateRange} />}
           {activeTab === 'Refunds'         && <RefundsTab    dateRange={dateRange} />}
           {activeTab === 'Journal Export'  && <JournalTab    dateRange={dateRange} />}
+          {activeTab === 'Xero'            && <XeroTab />}
         </main>
       </DemoModeContext.Provider>
     </div>

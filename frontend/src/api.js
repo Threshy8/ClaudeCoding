@@ -52,3 +52,10 @@ export const syncRedo = (store = 'au') =>
 // Journal export — returns CSV text
 export const exportJournal = (period) =>
   request(`/api/journal/export?period=${period}&format=csv`);
+
+// Xero
+export const getXeroStatus = () => request('/api/xero/status');
+export const getXeroPnl = (startDate, endDate) =>
+  request(`/api/xero/pnl?startDate=${startDate}&endDate=${endDate}`);
+export const disconnectXero = () =>
+  request('/api/xero/disconnect', { method: 'POST' });
