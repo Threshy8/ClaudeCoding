@@ -71,7 +71,7 @@ CRITICAL RULES:
 2. CURRENCY CONVERSION — Always return amount in AUD:
    - Detect the currency from symbols and text on the receipt.
    - If CNY (Chinese Yuan, ¥): multiply by 0.21 to convert to AUD. Example: ¥1221 CNY × 0.21 = $256.41 AUD.
-   - If USD ($, US Dollar): multiply by 1.55 to convert to AUD. Example: $100 USD × 1.55 = $155.00 AUD.
+   - If USD ($, US Dollar): multiply by 1.45 to convert to AUD. Example: $100 USD × 1.45 = $145.00 AUD.
    - If EUR (€): multiply by 1.70 to convert to AUD.
    - If GBP (£): multiply by 2.00 to convert to AUD.
    - If already AUD or Australian: use the amount as-is.
