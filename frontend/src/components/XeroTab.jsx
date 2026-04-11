@@ -167,7 +167,14 @@ export default function XeroTab() {
   );
 }
 
+function pctOf(amount, revenue) {
+  if (!revenue) return null;
+  return ((amount / revenue) * 100).toFixed(1) + '%';
+}
+
 function PnlTable({ data }) {
+  const revenue = data.tradingIncome.total;
+
   return (
     <div style={styles.card}>
       <table style={styles.table}>
@@ -175,74 +182,81 @@ function PnlTable({ data }) {
           <tr>
             <th style={styles.th}>Account</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Amount</th>
+            <th style={{ ...styles.th, textAlign: 'right', width: 90 }}>% of Revenue</th>
           </tr>
         </thead>
         <tbody>
           {/* Trading Income */}
           <SectionHeader title="Trading Income" />
           {Object.entries(data.tradingIncome).filter(([k]) => k !== 'total').map(([label, amount]) => (
-            <ItemRow key={label} label={label.replace(/_/g, ' ')} amount={amount} />
+            <ItemRow key={label} label={label.replace(/_/g, ' ')} amount={amount} pct={pctOf(amount, revenue)} />
           ))}
-          <TotalRow label="Total Trading Income" amount={data.tradingIncome.total} />
+          <TotalRow label="Total Trading Income" amount={data.tradingIncome.total} pct={revenue ? '100.0%' : null} />
 
           {/* Cost of Sales */}
           <SectionHeader title="Less Cost of Sales" />
           {Object.entries(data.costOfSales).filter(([k]) => k !== 'total').map(([label, amount]) => (
-            <ItemRow key={label} label={label.replace(/_/g, ' ')} amount={amount} />
+            <ItemRow key={label} label={label.replace(/_/g, ' ')} amount={amount} pct={pctOf(amount, revenue)} />
           ))}
-          <TotalRow label="Total Cost of Sales" amount={data.costOfSales.total} />
+          <TotalRow label="Total Cost of Sales" amount={data.costOfSales.total} pct={pctOf(data.costOfSales.total, revenue)} />
 
           {/* Gross Profit */}
-          <HighlightRow label="Gross Profit" amount={data.grossProfit} />
+          <HighlightRow label="Gross Profit" amount={data.grossProfit} pct={pctOf(data.grossProfit, revenue)} />
 
           {/* Operating Expenses */}
           <SectionHeader title="Less Operating Expenses" />
           {Object.entries(data.operatingExpenses).map(([label, amount]) => (
-            <ItemRow key={label} label={label} amount={amount} />
+            <ItemRow key={label} label={label} amount={amount} pct={pctOf(amount, revenue)} />
           ))}
-          <TotalRow label="Total Operating Expenses" amount={data.totalOperatingExpenses} />
+          <TotalRow label="Total Operating Expenses" amount={data.totalOperatingExpenses} pct={pctOf(data.totalOperatingExpenses, revenue)} />
 
           {/* Net Profit */}
-          <HighlightRow label="Net Profit" amount={data.netProfit} bold />
+          <HighlightRow label="Net Profit" amount={data.netProfit} pct={pctOf(data.netProfit, revenue)} bold />
         </tbody>
       </table>
     </div>
   );
 }
 
+const pctStyle = { padding: '6px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums' };
+
 function SectionHeader({ title }) {
   return (
     <tr>
-      <td colSpan={2} style={{ padding: '14px 12px 6px', fontWeight: 700, fontSize: 13, color: 'var(--text)', letterSpacing: '-0.01em', borderBottom: '1px solid var(--border-light)' }}>
+      <td colSpan={3} style={{ padding: '14px 12px 6px', fontWeight: 700, fontSize: 13, color: 'var(--text)', letterSpacing: '-0.01em', borderBottom: '1px solid var(--border-light)' }}>
         {title}
       </td>
     </tr>
   );
 }
 
-function ItemRow({ label, amount }) {
+function ItemRow({ label, amount, pct }) {
   return (
     <tr>
       <td style={{ padding: '6px 12px 6px 24px', fontSize: 13, color: 'var(--text-body)', textTransform: 'capitalize' }}>{label}</td>
       <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(amount)}</td>
+      <td style={pctStyle}>{pct}</td>
     </tr>
   );
 }
 
-function TotalRow({ label, amount }) {
+function TotalRow({ label, amount, pct }) {
   return (
     <tr style={{ borderTop: '1px solid var(--border-light)' }}>
       <td style={{ padding: '8px 12px 8px 16px', fontSize: 13, fontWeight: 600 }}>{label}</td>
       <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(amount)}</td>
+      <td style={{ ...pctStyle, fontWeight: 600 }}>{pct}</td>
     </tr>
   );
 }
 
-function HighlightRow({ label, amount, bold }) {
+function HighlightRow({ label, amount, pct, bold }) {
+  const borderStyle = { borderTop: '2px solid var(--border)', borderBottom: '2px solid var(--border)' };
   return (
     <tr style={{ background: 'var(--accent-dim2)' }}>
-      <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: bold ? 700 : 600, borderTop: '2px solid var(--border)', borderBottom: '2px solid var(--border)' }}>{label}</td>
-      <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: bold ? 700 : 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderTop: '2px solid var(--border)', borderBottom: '2px solid var(--border)', color: amount < 0 ? 'var(--red)' : 'var(--green)' }}>{formatCurrency(amount)}</td>
+      <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: bold ? 700 : 600, ...borderStyle }}>{label}</td>
+      <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: bold ? 700 : 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', ...borderStyle, color: amount < 0 ? 'var(--red)' : 'var(--green)' }}>{formatCurrency(amount)}</td>
+      <td style={{ ...pctStyle, fontWeight: bold ? 700 : 600, fontSize: 13, ...borderStyle }}>{pct}</td>
     </tr>
   );
 }
