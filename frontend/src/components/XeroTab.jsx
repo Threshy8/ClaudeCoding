@@ -167,9 +167,7 @@ export default function XeroTab() {
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>Loading P&amp;L data...</div>
       )}
 
-      {pnlData && <PnlTable data={pnlData} />}
-
-      {pnlData && capexItems.length > 0 && <CapitalItemsSection items={capexItems} />}
+      {pnlData && <PnlTable data={pnlData} capexItems={capexItems} />}
     </div>
   );
 }
@@ -179,8 +177,12 @@ function pctOf(amount, revenue) {
   return ((amount / revenue) * 100).toFixed(1) + '%';
 }
 
-function PnlTable({ data }) {
+function PnlTable({ data, capexItems = [] }) {
   const revenue = data.tradingIncome.total;
+  const capexTotal = capexItems.reduce((s, i) => s + Number(i.amount || 0), 0);
+  const hasCapex = capexTotal > 0;
+  const adjustedCos = data.costOfSales.total - capexTotal;
+  const adjustedGrossProfit = revenue - adjustedCos;
 
   return (
     <div style={styles.card}>
@@ -205,10 +207,41 @@ function PnlTable({ data }) {
           {Object.entries(data.costOfSales).filter(([k]) => k !== 'total').map(([label, amount]) => (
             <ItemRow key={label} label={label.replace(/_/g, ' ')} amount={amount} pct={pctOf(amount, revenue)} />
           ))}
-          <TotalRow label="Total Cost of Sales" amount={data.costOfSales.total} pct={pctOf(data.costOfSales.total, revenue)} />
+          <TotalRow label="Total Cost of Sales (Xero)" amount={data.costOfSales.total} pct={pctOf(data.costOfSales.total, revenue)} />
+
+          {/* Capital items adjustment */}
+          {hasCapex && (
+            <>
+              <tr>
+                <td style={{ padding: '6px 12px 6px 24px', fontSize: 13, color: 'var(--green)' }}>
+                  Less: Capital Items
+                  <span
+                    title="Capital purchases recorded in this period that may be included in Xero COGS"
+                    style={{ display: 'inline-block', marginLeft: 6, width: 15, height: 15, borderRadius: '50%', background: 'var(--bg-alt)', border: '1px solid var(--border)', textAlign: 'center', lineHeight: '14px', fontSize: 10, color: 'var(--text-muted)', cursor: 'help', verticalAlign: 'middle' }}
+                  >?</span>
+                </td>
+                <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>{formatCurrency(-capexTotal)}</td>
+                <td style={{ ...pctStyle, color: 'var(--green)' }}>{pctOf(capexTotal, revenue)}</td>
+              </tr>
+              <tr style={{ borderTop: '1px solid var(--border-light)' }}>
+                <td style={{ padding: '8px 12px 8px 16px', fontSize: 13, fontWeight: 700 }}>Adjusted Cost of Sales</td>
+                <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(adjustedCos)}</td>
+                <td style={{ ...pctStyle, fontWeight: 700 }}>{pctOf(adjustedCos, revenue)}</td>
+              </tr>
+            </>
+          )}
 
           {/* Gross Profit */}
-          <HighlightRow label="Gross Profit" amount={data.grossProfit} pct={pctOf(data.grossProfit, revenue)} />
+          <HighlightRow label="Gross Profit (Xero)" amount={data.grossProfit} pct={pctOf(data.grossProfit, revenue)} />
+
+          {/* Adjusted Gross Profit */}
+          {hasCapex && (
+            <tr style={{ background: 'rgba(42,122,75,0.07)' }}>
+              <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>Adjusted Gross Profit</td>
+              <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>{formatCurrency(adjustedGrossProfit)}</td>
+              <td style={{ ...pctStyle, fontWeight: 700, fontSize: 13, borderTop: '2px solid var(--green)', borderBottom: '2px solid var(--green)', color: 'var(--green)' }}>{pctOf(adjustedGrossProfit, revenue)}</td>
+            </tr>
+          )}
 
           {/* Operating Expenses */}
           <SectionHeader title="Less Operating Expenses" />
@@ -267,56 +300,6 @@ function HighlightRow({ label, amount, pct, bold }) {
     </tr>
   );
 }
-
-const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function CapitalItemsSection({ items }) {
-  const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
-
-  return (
-    <div style={{ marginTop: 24 }}>
-      <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 12px', letterSpacing: '-0.01em' }}>Capital Items</h3>
-      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th style={{ ...capexTh, textAlign: 'left' }}>Date</th>
-              <th style={{ ...capexTh, textAlign: 'left' }}>Name</th>
-              <th style={{ ...capexTh, textAlign: 'left' }}>Category</th>
-              <th style={{ ...capexTh, textAlign: 'right' }}>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map(item => {
-              const d = new Date(item.purchase_date + 'T12:00:00');
-              const dateStr = `${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
-              return (
-                <tr key={item.id}>
-                  <td style={capexTd}>{dateStr}</td>
-                  <td style={{ ...capexTd, fontWeight: 500 }}>{item.name}</td>
-                  <td style={capexTd}>{item.category}</td>
-                  <td style={{ ...capexTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(Number(item.amount))}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr style={{ borderTop: '2px solid var(--border)' }}>
-              <td colSpan={3} style={{ ...capexTd, fontWeight: 700 }}>Total Capital Items</td>
-              <td style={{ ...capexTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(total)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8, fontStyle: 'italic' }}>
-        Note: These items may be recorded as COGS in Xero
-      </p>
-    </div>
-  );
-}
-
-const capexTh = { padding: '10px 12px', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' };
-const capexTd = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--border-light)' };
 
 const styles = {
   card: {
