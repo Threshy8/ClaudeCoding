@@ -17,18 +17,21 @@ function createXeroClient() {
 
 // Ensure xero_tokens table exists
 async function ensureTable() {
-  await supabase.rpc('exec_sql', {
-    query: `CREATE TABLE IF NOT EXISTS xero_tokens (
-      id SERIAL PRIMARY KEY,
-      access_token TEXT,
-      refresh_token TEXT,
-      expires_at TIMESTAMP,
-      tenant_id TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )`
-  }).catch(() => {
-    // RPC may not exist — table should be created via SQL editor
-  });
+  try {
+    const { error } = await supabase.rpc('exec_sql', {
+      query: `CREATE TABLE IF NOT EXISTS xero_tokens (
+        id SERIAL PRIMARY KEY,
+        access_token TEXT,
+        refresh_token TEXT,
+        expires_at TIMESTAMP,
+        tenant_id TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`
+    });
+    if (error) console.warn('ensureTable RPC unavailable — table should be created via SQL editor:', error.message);
+  } catch (err) {
+    console.warn('ensureTable RPC unavailable — table should be created via SQL editor:', err.message);
+  }
 }
 
 // Get stored token row (most recent)
@@ -45,10 +48,17 @@ async function getStoredToken() {
 
 // Save or update token
 async function saveToken(tokenData) {
-  // Delete old tokens first
-  await supabase.from('xero_tokens').delete().neq('id', 0);
-  const { error } = await supabase.from('xero_tokens').insert(tokenData);
-  if (error) throw new Error(`Failed to save token: ${error.message}`);
+  try {
+    // Delete old tokens first
+    const { error: deleteError } = await supabase.from('xero_tokens').delete().neq('id', 0);
+    if (deleteError) console.error('Failed to clear old tokens:', deleteError.message);
+
+    const { error: insertError } = await supabase.from('xero_tokens').insert(tokenData);
+    if (insertError) throw new Error(`Failed to save token: ${insertError.message}`);
+  } catch (err) {
+    console.error('saveToken error:', err.message);
+    throw err;
+  }
 }
 
 // Build an authenticated XeroClient from stored tokens
@@ -187,7 +197,8 @@ router.get('/pnl', async (req, res) => {
 // POST /disconnect — remove tokens
 router.post('/disconnect', async (req, res) => {
   try {
-    await supabase.from('xero_tokens').delete().neq('id', 0);
+    const { error } = await supabase.from('xero_tokens').delete().neq('id', 0);
+    if (error) throw new Error(`Failed to delete tokens: ${error.message}`);
     res.json({ success: true });
   } catch (err) {
     console.error('Xero disconnect error:', err);
