@@ -213,15 +213,25 @@ function PnlTable({ data, capexItems = [] }) {
           {hasCapex && (
             <>
               <tr>
-                <td style={{ padding: '6px 12px 6px 24px', fontSize: 13, color: 'var(--green)' }}>
+                <td colSpan={3} style={{ padding: '10px 12px 4px 24px', fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
                   Less: Capital Items
                   <span
                     title="Capital purchases recorded in this period that may be included in Xero COGS"
                     style={{ display: 'inline-block', marginLeft: 6, width: 15, height: 15, borderRadius: '50%', background: 'var(--bg-alt)', border: '1px solid var(--border)', textAlign: 'center', lineHeight: '14px', fontSize: 10, color: 'var(--text-muted)', cursor: 'help', verticalAlign: 'middle' }}
                   >?</span>
                 </td>
-                <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>{formatCurrency(-capexTotal)}</td>
-                <td style={{ ...pctStyle, color: 'var(--green)' }}>{pctOf(capexTotal, revenue)}</td>
+              </tr>
+              {capexItems.map(item => (
+                <tr key={item.id}>
+                  <td style={{ padding: '4px 12px 4px 40px', fontSize: 12, color: 'var(--text-muted)' }}>{item.name}</td>
+                  <td style={{ padding: '4px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>{formatCurrency(-Number(item.amount))}</td>
+                  <td style={{ ...pctStyle, fontSize: 11, color: 'var(--text-dim)' }}>{pctOf(Number(item.amount), revenue)}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: '1px solid var(--border-light)' }}>
+                <td style={{ padding: '6px 12px 6px 24px', fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>Total Capital Items</td>
+                <td style={{ padding: '6px 12px', fontSize: 13, fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>{formatCurrency(-capexTotal)}</td>
+                <td style={{ ...pctStyle, fontWeight: 600, color: 'var(--green)' }}>{pctOf(capexTotal, revenue)}</td>
               </tr>
               <tr style={{ borderTop: '1px solid var(--border-light)' }}>
                 <td style={{ padding: '8px 12px 8px 16px', fontSize: 13, fontWeight: 700 }}>Adjusted Cost of Sales</td>
