@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../db/supabase');
+const Anthropic = require('@anthropic-ai/sdk');
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // GET /api/capital-expenses — list all, ordered by purchase_date desc
 router.get('/', async (req, res) => {
@@ -43,6 +46,59 @@ router.delete('/:id', async (req, res) => {
   const { error } = await supabase.from('capital_expenses').delete().eq('id', id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true });
+});
+
+// POST /api/capital-expenses/parse-receipt — AI extraction from pasted receipt text
+router.post('/parse-receipt', async (req, res) => {
+  const { text } = req.body;
+
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: 'Receipt text is required' });
+  }
+
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: `You are a receipt parser for a small business. Extract the capital expense details from this receipt text.
+
+Return JSON in this exact format (no markdown, no explanation):
+{
+  "name": "short asset/item name",
+  "category": "one of: Machinery, Equipment, Furniture, Vehicle, Technology, Other",
+  "amount": 0.00,
+  "purchase_date": "YYYY-MM-DD",
+  "notes": "supplier name, reference number, or other relevant details"
+}
+
+Rules:
+- "amount" should be the total amount paid (inc GST/tax if shown). Use the final total, not subtotals.
+- "category" MUST be exactly one of: Machinery, Equipment, Furniture, Vehicle, Technology, Other
+- "purchase_date" should be the transaction/purchase date. If not found, use null.
+- "name" should be a concise description of what was purchased (the main asset/item)
+- "notes" should include supplier name, invoice/receipt number, payment method, or other useful context
+- All amounts in AUD unless otherwise stated
+
+Receipt text:
+${text}`,
+      }],
+    });
+
+    const rawText = message.content[0]?.text || '';
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+    } catch {
+      return res.status(422).json({ error: 'Could not parse Claude response', raw: rawText });
+    }
+
+    res.json({ success: true, parsed });
+  } catch (err) {
+    console.error('Receipt parse error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

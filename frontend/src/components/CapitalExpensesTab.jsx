@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { getCapitalExpenses, createCapitalExpense, deleteCapitalExpense } from '../api';
+import { getCapitalExpenses, createCapitalExpense, deleteCapitalExpense, parseCapitalReceipt } from '../api';
 
 const CATEGORIES = ['Machinery', 'Equipment', 'Furniture', 'Vehicle', 'Technology', 'Other'];
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -23,6 +23,9 @@ export default function CapitalExpensesTab() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [receiptText, setReceiptText] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [showPaste, setShowPaste] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,11 +67,59 @@ export default function CapitalExpensesTab() {
     }
   };
 
+  const handleExtract = async () => {
+    if (!receiptText.trim()) return;
+    setExtracting(true);
+    setError(null);
+    try {
+      const { parsed } = await parseCapitalReceipt(receiptText);
+      setForm({
+        name: parsed.name || '',
+        category: CATEGORIES.includes(parsed.category) ? parsed.category : 'Other',
+        amount: parsed.amount != null ? String(parsed.amount) : '',
+        purchase_date: parsed.purchase_date || '',
+        notes: parsed.notes || '',
+      });
+      setReceiptText('');
+      setShowPaste(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
       <h2 style={styles.heading}>Capital Expenses</h2>
+
+      {/* Paste Receipt */}
+      <div style={{ marginBottom: 16 }}>
+        {!showPaste ? (
+          <button onClick={() => setShowPaste(true)} style={styles.pasteToggleBtn}>
+            Paste Receipt
+          </button>
+        ) : (
+          <div style={styles.pasteCard}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Paste receipt text below</span>
+              <button onClick={() => { setShowPaste(false); setReceiptText(''); }} style={styles.pasteCancelBtn}>Cancel</button>
+            </div>
+            <textarea
+              value={receiptText}
+              onChange={e => setReceiptText(e.target.value)}
+              placeholder="Paste receipt or invoice text here..."
+              rows={6}
+              style={styles.textarea}
+            />
+            <button onClick={handleExtract} disabled={extracting || !receiptText.trim()} style={styles.extractBtn}>
+              {extracting ? 'Extracting...' : 'Extract'}
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Add form */}
       <form onSubmit={handleSubmit} style={styles.form}>
@@ -201,5 +252,27 @@ const styles = {
   errorBanner: {
     background: 'var(--red-dim)', color: 'var(--red)', padding: '10px 16px',
     borderRadius: 8, marginBottom: 16, fontSize: 13, fontWeight: 500,
+  },
+  pasteToggleBtn: {
+    padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+    background: 'var(--bg-card)', color: 'var(--text-body)', border: '1px solid var(--border)',
+    cursor: 'pointer', boxShadow: 'var(--shadow-xs)',
+  },
+  pasteCard: {
+    padding: '16px 20px', background: 'var(--bg-card)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius)', boxShadow: 'var(--shadow-xs)',
+  },
+  pasteCancelBtn: {
+    background: 'none', border: 'none', cursor: 'pointer', fontSize: 12,
+    color: 'var(--text-muted)', padding: '4px 8px',
+  },
+  textarea: {
+    width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)',
+    fontSize: 13, background: 'var(--bg)', outline: 'none', resize: 'vertical',
+    fontFamily: 'var(--font-sans)', boxSizing: 'border-box',
+  },
+  extractBtn: {
+    marginTop: 10, padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+    background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
   },
 };
