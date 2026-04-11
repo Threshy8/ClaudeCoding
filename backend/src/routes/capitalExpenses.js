@@ -48,21 +48,7 @@ router.delete('/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-// POST /api/capital-expenses/parse-receipt — AI extraction from pasted receipt text
-router.post('/parse-receipt', async (req, res) => {
-  const { text } = req.body;
-
-  if (!text || !text.trim()) {
-    return res.status(400).json({ error: 'Receipt text is required' });
-  }
-
-  try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: `You are a receipt parser for a small business. Extract the capital expense details from this receipt text.
+const PARSE_PROMPT = `You are a receipt parser for a small business. Extract the capital expense details from this receipt/invoice.
 
 Return JSON in this exact format (no markdown, no explanation):
 {
@@ -79,11 +65,31 @@ Rules:
 - "purchase_date" should be the transaction/purchase date. If not found, use null.
 - "name" should be a concise description of what was purchased (the main asset/item)
 - "notes" should include supplier name, invoice/receipt number, payment method, or other useful context
-- All amounts in AUD unless otherwise stated
+- All amounts in AUD unless otherwise stated`;
 
-Receipt text:
-${text}`,
-      }],
+// POST /api/capital-expenses/parse-receipt — AI extraction from text or image
+router.post('/parse-receipt', async (req, res) => {
+  const { text, image_base64, media_type } = req.body;
+
+  if (!text && !image_base64) {
+    return res.status(400).json({ error: 'Receipt text or image is required' });
+  }
+
+  try {
+    let content;
+    if (image_base64) {
+      content = [
+        { type: 'image', source: { type: 'base64', media_type: media_type || 'image/jpeg', data: image_base64 } },
+        { type: 'text', text: PARSE_PROMPT },
+      ];
+    } else {
+      content = `${PARSE_PROMPT}\n\nReceipt text:\n${text}`;
+    }
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content }],
     });
 
     const rawText = message.content[0]?.text || '';

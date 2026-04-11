@@ -64,8 +64,8 @@ export const createCapitalExpense = (body) =>
   request('/api/capital-expenses', { method: 'POST', body: JSON.stringify(body) });
 export const deleteCapitalExpense = (id) =>
   request(`/api/capital-expenses/${id}`, { method: 'DELETE' });
-export const parseCapitalReceipt = (text) =>
-  request('/api/capital-expenses/parse-receipt', { method: 'POST', body: JSON.stringify({ text }) });
+export const parseCapitalReceipt = ({ text, image_base64, media_type }) =>
+  request('/api/capital-expenses/parse-receipt', { method: 'POST', body: JSON.stringify({ text, image_base64, media_type }) });
 
 // Xero
 export const getXeroStatus = () => request('/api/xero/status');

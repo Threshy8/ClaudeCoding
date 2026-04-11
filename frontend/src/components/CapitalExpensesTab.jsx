@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { getCapitalExpenses, createCapitalExpense, deleteCapitalExpense, parseCapitalReceipt } from '../api';
 
 const CATEGORIES = ['Machinery', 'Equipment', 'Furniture', 'Vehicle', 'Technology', 'Other'];
@@ -32,8 +32,13 @@ export default function CapitalExpensesTab() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-  const [receiptText, setReceiptText] = useState('');
-  const [extracting, setExtracting] = useState(false);
+
+  // Image upload state
+  const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+  const dropZoneRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,6 +62,7 @@ export default function CapitalExpensesTab() {
     try {
       await createCapitalExpense(form);
       setForm(emptyForm);
+      setPreview(null);
       await load();
     } catch (err) {
       setError(err.message);
@@ -75,12 +81,45 @@ export default function CapitalExpensesTab() {
     }
   };
 
-  const handleExtract = async () => {
-    if (!receiptText.trim()) return;
-    setExtracting(true);
+  // Shared: compress image then send to parse endpoint
+  const processFile = async (file) => {
+    if (!file.type.startsWith('image/')) {
+      setError('Please upload an image file (JPG, PNG)');
+      return;
+    }
+
+    setUploading(true);
     setError(null);
+
     try {
-      const { parsed } = await parseCapitalReceipt(receiptText);
+      // Show preview
+      const previewUrl = URL.createObjectURL(file);
+      setPreview(previewUrl);
+
+      // Compress image
+      const img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = reject;
+        i.src = URL.createObjectURL(file);
+      });
+      const MAX = 1500;
+      let { width, height } = img;
+      if (width > MAX || height > MAX) {
+        const scale = MAX / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(img.src);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+      const base64 = dataUrl.split(',')[1];
+
+      const { parsed } = await parseCapitalReceipt({ image_base64: base64, media_type: 'image/jpeg' });
+
       setForm({
         name: parsed.name || '',
         category: CATEGORIES.includes(parsed.category) ? parsed.category : 'Other',
@@ -88,59 +127,95 @@ export default function CapitalExpensesTab() {
         purchase_date: parsed.purchase_date || '',
         notes: parsed.notes || '',
       });
-      setReceiptText('');
     } catch (err) {
       setError(err.message);
     } finally {
-      setExtracting(false);
+      setUploading(false);
     }
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    processFile(file);
+  };
+
+  // Cmd+V paste support
+  const handlePaste = useCallback((e) => {
+    if (uploading) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) processFile(file);
+        return;
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploading]);
+
+  // Drag & drop
+  const handleDragOver = (e) => { e.preventDefault(); setDragOver(true); };
+  const handleDragLeave = () => setDragOver(false);
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) processFile(file);
   };
 
   const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
   const hasFormData = form.name || form.amount || form.purchase_date || form.notes;
 
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto' }}>
+    <div
+      tabIndex={0}
+      onPaste={handlePaste}
+      style={{ maxWidth: 960, margin: '0 auto', outline: 'none' }}
+    >
       <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 20px', letterSpacing: '-0.02em' }}>Capital Expenses</h2>
 
       {error && (
-        <div style={s.errorBanner}>
+        <div style={st.errorBanner}>
           {error}
           <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 14, padding: '0 4px' }}>x</button>
         </div>
       )}
 
       {/* Two-panel layout */}
-      <div style={s.panelRow}>
+      <div style={st.panelRow}>
         {/* Left: Manual form */}
-        <form onSubmit={handleSubmit} style={s.formCard}>
-          <div style={s.cardHeader}>Add Manually</div>
+        <form onSubmit={handleSubmit} style={st.formCard}>
+          <div style={st.cardHeader}>Add Manually</div>
 
-          <div style={s.fieldGroup}>
-            <label style={s.label}>Asset Name</label>
+          <div style={st.fieldGroup}>
+            <label style={st.label}>Asset Name</label>
             <input
               value={form.name}
               onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
               placeholder="e.g. MacBook Pro 16&quot;"
               required
-              style={s.input}
+              style={st.input}
             />
           </div>
 
-          <div style={s.fieldGroup}>
-            <label style={s.label}>Category</label>
+          <div style={st.fieldGroup}>
+            <label style={st.label}>Category</label>
             <select
               value={form.category}
               onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-              style={s.input}
+              style={st.input}
             >
               {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
 
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ ...s.fieldGroup, flex: 1 }}>
-              <label style={s.label}>Amount (AUD)</label>
+            <div style={{ ...st.fieldGroup, flex: 1 }}>
+              <label style={st.label}>Amount (AUD)</label>
               <input
                 type="number"
                 step="0.01"
@@ -149,110 +224,144 @@ export default function CapitalExpensesTab() {
                 onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                 placeholder="0.00"
                 required
-                style={s.input}
+                style={st.input}
               />
             </div>
-            <div style={{ ...s.fieldGroup, flex: 1 }}>
-              <label style={s.label}>Purchase Date</label>
+            <div style={{ ...st.fieldGroup, flex: 1 }}>
+              <label style={st.label}>Purchase Date</label>
               <input
                 type="date"
                 value={form.purchase_date}
                 onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))}
                 required
-                style={s.input}
+                style={st.input}
               />
             </div>
           </div>
 
-          <div style={s.fieldGroup}>
-            <label style={s.label}>Notes <span style={{ fontWeight: 400, color: 'var(--text-dim)' }}>(optional)</span></label>
+          <div style={st.fieldGroup}>
+            <label style={st.label}>Notes <span style={{ fontWeight: 400, color: 'var(--text-dim)' }}>(optional)</span></label>
             <input
               value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
               placeholder="Supplier, invoice ref, etc."
-              style={s.input}
+              style={st.input}
             />
           </div>
 
-          <button type="submit" disabled={saving} style={s.primaryBtn}>
+          <button type="submit" disabled={saving} style={st.primaryBtn}>
             {saving ? 'Adding...' : 'Add Expense'}
           </button>
 
           {hasFormData && (
-            <button type="button" onClick={() => setForm(emptyForm)} style={s.clearBtn}>Clear form</button>
+            <button type="button" onClick={() => { setForm(emptyForm); setPreview(null); }} style={st.clearBtn}>Clear form</button>
           )}
         </form>
 
-        {/* Right: Paste receipt */}
-        <div style={s.pasteCard}>
-          <div style={s.cardHeader}>Paste Receipt</div>
+        {/* Right: Upload receipt image */}
+        <div style={st.uploadCard}>
+          <div style={st.cardHeader}>Upload Receipt</div>
 
-          <div style={s.pasteIconRow}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-            </svg>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Paste receipt or invoice text below</span>
-          </div>
-
-          <div style={s.pasteDropZone}>
-            <textarea
-              value={receiptText}
-              onChange={e => setReceiptText(e.target.value)}
-              placeholder="Paste receipt text here... (e.g. email confirmation, order summary, invoice text)"
-              rows={6}
-              style={s.textarea}
-            />
-          </div>
-
-          <button
-            onClick={handleExtract}
-            disabled={extracting || !receiptText.trim()}
+          <div
+            ref={dropZoneRef}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
             style={{
-              ...s.secondaryBtn,
-              opacity: (!receiptText.trim() && !extracting) ? 0.5 : 1,
+              ...st.dropZone,
+              borderColor: dragOver ? 'var(--accent)' : 'var(--border)',
+              background: dragOver ? 'var(--accent-dim2)' : 'var(--bg)',
             }}
           >
-            {extracting ? 'Extracting...' : 'Extract with AI'}
-          </button>
+            {uploading ? (
+              <div style={st.dropContent}>
+                <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite' }}>+</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Parsing receipt...</div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>Extracting details with AI</div>
+              </div>
+            ) : preview ? (
+              <div style={st.dropContent}>
+                <img src={preview} alt="Receipt preview" style={{ maxWidth: '100%', maxHeight: 160, borderRadius: 6, objectFit: 'contain', marginBottom: 8 }} />
+                <div style={{ fontSize: 12, color: 'var(--green)', fontWeight: 600 }}>Extracted — review the form on the left</div>
+                <button
+                  onClick={() => { setPreview(null); if (fileInputRef.current) fileInputRef.current.click(); }}
+                  style={{ ...st.linkBtn, marginTop: 4 }}
+                >
+                  Upload a different image
+                </button>
+              </div>
+            ) : (
+              <div style={st.dropContent}>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <polyline points="21 15 16 10 5 21" />
+                </svg>
+                <div style={{ fontSize: 13, fontWeight: 600, marginTop: 10 }}>
+                  Drop image here, or{' '}
+                  <span onClick={() => fileInputRef.current?.click()} style={{ color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline' }}>browse</span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>
+                  JPG, PNG — or paste with Cmd+V
+                </div>
+              </div>
+            )}
+          </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFileUpload}
+            hidden
+          />
+
+          {!preview && !uploading && (
+            <label
+              style={st.uploadBtn}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              + Upload Invoice
+            </label>
+          )}
         </div>
       </div>
 
       {/* Table */}
-      <div style={s.tableCard}>
+      <div style={st.tableCard}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              <th style={s.th}>Date</th>
-              <th style={s.th}>Name</th>
-              <th style={s.th}>Category</th>
-              <th style={{ ...s.th, textAlign: 'right' }}>Amount</th>
-              <th style={s.th}>Notes</th>
-              <th style={{ ...s.th, width: 40 }}></th>
+              <th style={st.th}>Date</th>
+              <th style={st.th}>Name</th>
+              <th style={st.th}>Category</th>
+              <th style={{ ...st.th, textAlign: 'right' }}>Amount</th>
+              <th style={st.th}>Notes</th>
+              <th style={{ ...st.th, width: 40 }}></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6} style={s.emptyCell}>Loading...</td></tr>
+              <tr><td colSpan={6} style={st.emptyCell}>Loading...</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={6} style={s.emptyCell}>No capital expenses recorded yet</td></tr>
+              <tr><td colSpan={6} style={st.emptyCell}>No capital expenses recorded yet</td></tr>
             ) : items.map((item, idx) => {
               const catColor = CATEGORY_COLORS[item.category] || CATEGORY_COLORS.Other;
               return (
                 <tr key={item.id} style={{ background: idx % 2 === 1 ? 'var(--bg-alt)' : 'transparent' }}>
-                  <td style={s.td}>{fmtDate(item.purchase_date)}</td>
-                  <td style={{ ...s.td, fontWeight: 500, color: 'var(--text)' }}>{item.name}</td>
-                  <td style={s.td}>
-                    <span style={{ ...s.badge, background: catColor.bg, color: catColor.text }}>{item.category}</span>
+                  <td style={st.td}>{fmtDate(item.purchase_date)}</td>
+                  <td style={{ ...st.td, fontWeight: 500, color: 'var(--text)' }}>{item.name}</td>
+                  <td style={st.td}>
+                    <span style={{ ...st.badge, background: catColor.bg, color: catColor.text }}>{item.category}</span>
                   </td>
-                  <td style={{ ...s.td, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--text)' }}>
+                  <td style={{ ...st.td, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--text)' }}>
                     {fmtCurrency(item.amount)}
                   </td>
-                  <td style={{ ...s.td, color: 'var(--text-muted)', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td style={{ ...st.td, color: 'var(--text-muted)', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.notes || '-'}
                   </td>
-                  <td style={{ ...s.td, textAlign: 'center' }}>
-                    <button onClick={() => handleDelete(item.id)} style={s.trashBtn} title="Delete">
+                  <td style={{ ...st.td, textAlign: 'center' }}>
+                    <button onClick={() => handleDelete(item.id)} style={st.trashBtn} title="Delete">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="3 6 5 6 21 6" />
                         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -267,7 +376,7 @@ export default function CapitalExpensesTab() {
 
         {/* Summary bar */}
         {items.length > 0 && (
-          <div style={s.summaryBar}>
+          <div style={st.summaryBar}>
             <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
               {items.length} item{items.length !== 1 ? 's' : ''}
             </span>
@@ -281,7 +390,7 @@ export default function CapitalExpensesTab() {
   );
 }
 
-const s = {
+const st = {
   panelRow: {
     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24,
   },
@@ -290,7 +399,7 @@ const s = {
     padding: '20px 24px', background: 'var(--bg-card)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius)', boxShadow: 'var(--shadow-sm)',
   },
-  pasteCard: {
+  uploadCard: {
     display: 'flex', flexDirection: 'column', gap: 12,
     padding: '20px 24px', background: 'var(--bg-card)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius)', boxShadow: 'var(--shadow-sm)',
@@ -319,22 +428,22 @@ const s = {
     background: 'none', border: 'none', cursor: 'pointer', fontSize: 12,
     color: 'var(--text-dim)', textAlign: 'center', padding: '4px 0',
   },
-  pasteIconRow: {
-    display: 'flex', alignItems: 'center', gap: 8,
-  },
-  pasteDropZone: {
+  dropZone: {
     border: '2px dashed var(--border)', borderRadius: 'var(--radius-sm)',
-    padding: 2, background: 'var(--bg)',
+    padding: 20, transition: 'all 0.15s', cursor: 'pointer', minHeight: 180,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
-  textarea: {
-    width: '100%', padding: '10px 12px', border: 'none', borderRadius: 'var(--radius-sm)',
-    fontSize: 13, background: 'transparent', outline: 'none', resize: 'vertical',
-    fontFamily: 'var(--font-sans)', boxSizing: 'border-box', lineHeight: 1.5,
+  dropContent: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center',
   },
-  secondaryBtn: {
-    padding: '10px', borderRadius: 'var(--radius-sm)', fontSize: 13, fontWeight: 600,
-    background: 'var(--bg)', color: 'var(--text-body)', border: '1px solid var(--border)',
-    cursor: 'pointer', transition: 'all 0.15s',
+  uploadBtn: {
+    display: 'block', textAlign: 'center', padding: '10px', borderRadius: 'var(--radius-sm)',
+    fontSize: 13, fontWeight: 600, background: 'var(--accent)', color: '#fff',
+    border: 'none', cursor: 'pointer',
+  },
+  linkBtn: {
+    background: 'none', border: 'none', cursor: 'pointer', fontSize: 12,
+    color: 'var(--text-muted)', textDecoration: 'underline', padding: 0,
   },
   tableCard: {
     background: 'var(--bg-card)', border: '1px solid var(--border)',
