@@ -20,6 +20,7 @@ const auspostRouter = require('./routes/auspost');
 const redoRouter = require('./routes/redo');
 const payoutsRouter = require('./routes/payouts');
 const xeroRouter = require('./routes/xero');
+const capitalExpensesRouter = require('./routes/capitalExpenses');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -40,6 +41,7 @@ app.use('/api/3pl/auspost', auspostRouter);
 app.use('/api/sync/redo', redoRouter);
 app.use('/api/payouts', payoutsRouter);
 app.use('/api/xero', xeroRouter);
+app.use('/api/capital-expenses', capitalExpensesRouter);
 
 // Root health check (Railway checks GET /)
 app.get('/', (req, res) => res.json({ status: 'ok' }));

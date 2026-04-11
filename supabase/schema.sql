@@ -132,3 +132,17 @@ CREATE TABLE IF NOT EXISTS xero_tokens (
   tenant_id TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============================================================
+-- Capital Expenses
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS capital_expenses (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  purchase_date DATE NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);

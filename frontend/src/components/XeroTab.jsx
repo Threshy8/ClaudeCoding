@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { getXeroStatus, getXeroPnl, disconnectXero } from '../api';
+import { getXeroStatus, getXeroPnl, disconnectXero, getCapitalExpenses } from '../api';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -25,6 +25,7 @@ export default function XeroTab() {
   const [pnlError, setPnlError] = useState(null);
   const [dates, setDates] = useState(defaultDateRange);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [capexItems, setCapexItems] = useState([]);
 
   // Check for ?connected=true in URL on mount
   useEffect(() => {
@@ -58,8 +59,12 @@ export default function XeroTab() {
     setPnlLoading(true);
     setPnlError(null);
     try {
-      const data = await getXeroPnl(dates.start, dates.end);
+      const [data, capex] = await Promise.all([
+        getXeroPnl(dates.start, dates.end),
+        getCapitalExpenses(dates.start, dates.end).catch(() => []),
+      ]);
       setPnlData(data);
+      setCapexItems(capex);
     } catch (err) {
       setPnlError(err.message);
     } finally {
@@ -163,6 +168,8 @@ export default function XeroTab() {
       )}
 
       {pnlData && <PnlTable data={pnlData} />}
+
+      {pnlData && capexItems.length > 0 && <CapitalItemsSection items={capexItems} />}
     </div>
   );
 }
@@ -260,6 +267,56 @@ function HighlightRow({ label, amount, pct, bold }) {
     </tr>
   );
 }
+
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function CapitalItemsSection({ items }) {
+  const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 12px', letterSpacing: '-0.01em' }}>Capital Items</h3>
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ ...capexTh, textAlign: 'left' }}>Date</th>
+              <th style={{ ...capexTh, textAlign: 'left' }}>Name</th>
+              <th style={{ ...capexTh, textAlign: 'left' }}>Category</th>
+              <th style={{ ...capexTh, textAlign: 'right' }}>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(item => {
+              const d = new Date(item.purchase_date + 'T12:00:00');
+              const dateStr = `${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
+              return (
+                <tr key={item.id}>
+                  <td style={capexTd}>{dateStr}</td>
+                  <td style={{ ...capexTd, fontWeight: 500 }}>{item.name}</td>
+                  <td style={capexTd}>{item.category}</td>
+                  <td style={{ ...capexTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(Number(item.amount))}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: '2px solid var(--border)' }}>
+              <td colSpan={3} style={{ ...capexTd, fontWeight: 700 }}>Total Capital Items</td>
+              <td style={{ ...capexTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8, fontStyle: 'italic' }}>
+        Note: These items may be recorded as COGS in Xero
+      </p>
+    </div>
+  );
+}
+
+const capexTh = { padding: '10px 12px', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' };
+const capexTd = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--border-light)' };
 
 const styles = {
   card: {

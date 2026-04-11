@@ -53,6 +53,18 @@ export const syncRedo = (store = 'au') =>
 export const exportJournal = (period) =>
   request(`/api/journal/export?period=${period}&format=csv`);
 
+// Capital Expenses
+export const getCapitalExpenses = (startDate, endDate) => {
+  const params = new URLSearchParams();
+  if (startDate) params.set('start_date', startDate);
+  if (endDate) params.set('end_date', endDate);
+  return request(`/api/capital-expenses?${params}`);
+};
+export const createCapitalExpense = (body) =>
+  request('/api/capital-expenses', { method: 'POST', body: JSON.stringify(body) });
+export const deleteCapitalExpense = (id) =>
+  request(`/api/capital-expenses/${id}`, { method: 'DELETE' });
+
 // Xero
 export const getXeroStatus = () => request('/api/xero/status');
 export const getXeroPnl = (startDate, endDate) =>
