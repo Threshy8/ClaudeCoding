@@ -522,18 +522,24 @@ function GermanDropWalletView() {
   const [showForm, setShowForm]     = useState(false);
   const [form, setForm]             = useState({ topup_date: '', amount_aud: '', notes: '' });
   const [saving, setSaving]         = useState(false);
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balanceInput, setBalanceInput]     = useState('');
+  const [manualOverride, setManualOverride] = useState(null);
+  const [savingBalance, setSavingBalance]   = useState(false);
   const { mc } = useDemoMask();
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [t, o] = await Promise.all([
+      const [t, o, bal] = await Promise.all([
         apiFetch('/api/purchases/germandrop/topups'),
         apiFetch('/api/purchases/germandrop/order-costs'),
+        apiFetch('/api/purchases/germandrop/balance').catch(() => null),
       ]);
       setTopups(t || []);
       setOrderCosts(o || []);
+      if (bal) setManualOverride(bal.manual_override);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -545,7 +551,39 @@ function GermanDropWalletView() {
 
   const totalTopups = topups.reduce((s, t) => s + (parseFloat(t.amount_aud) || 0), 0);
   const totalSpent = orderCosts.reduce((s, c) => s + (parseFloat(c.shipping_cost) || 0), 0);
-  const balance = totalTopups - totalSpent;
+  const calculatedBalance = totalTopups - totalSpent;
+  const balance = manualOverride != null ? manualOverride : calculatedBalance;
+
+  const handleSaveBalance = async () => {
+    const val = parseFloat(balanceInput);
+    if (isNaN(val)) return;
+    setSavingBalance(true);
+    try {
+      await apiFetch('/api/purchases/germandrop/balance', {
+        method: 'POST',
+        body: JSON.stringify({ balance_aud: val }),
+      });
+      setManualOverride(val);
+      setEditingBalance(false);
+    } catch (err) {
+      alert('Failed: ' + err.message);
+    } finally {
+      setSavingBalance(false);
+    }
+  };
+
+  const handleClearOverride = async () => {
+    setSavingBalance(true);
+    try {
+      await apiFetch('/api/purchases/germandrop/balance', { method: 'DELETE' });
+      setManualOverride(null);
+      setEditingBalance(false);
+    } catch (err) {
+      alert('Failed: ' + err.message);
+    } finally {
+      setSavingBalance(false);
+    }
+  };
 
   const handleAddTopup = async (e) => {
     e.preventDefault();
@@ -574,12 +612,11 @@ function GermanDropWalletView() {
 
   return (
     <div>
-      {/* Balance card */}
+      {/* Balance cards */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
         {[
           { label: 'Total Topped Up', value: mc(_fmt(totalTopups)), color: '' },
           { label: 'Total GD Order Costs', value: mc(_fmt(totalSpent)), color: '#ef4444' },
-          { label: 'Remaining Balance', value: mc(_fmt(balance)), color: balance >= 0 ? '#059669' : '#ef4444' },
         ].map(c => (
           <div key={c.label} style={{
             background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -589,6 +626,60 @@ function GermanDropWalletView() {
             <div style={{ fontSize: 22, fontWeight: 700, color: c.color || 'var(--text)' }}>{c.value}</div>
           </div>
         ))}
+        {/* Remaining Balance — editable */}
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: 10, padding: '16px 20px', flex: 1, minWidth: 180,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+            Remaining Balance
+            {manualOverride != null && <span style={{ fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: '#b45309' }}>MANUAL</span>}
+          </div>
+          {editingBalance ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-muted)' }}>$</span>
+              <input
+                type="number"
+                step="0.01"
+                value={balanceInput}
+                onChange={e => setBalanceInput(e.target.value)}
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter') handleSaveBalance(); if (e.key === 'Escape') setEditingBalance(false); }}
+                style={{ width: 120, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--accent)', fontSize: 18, fontWeight: 700, outline: 'none', background: 'var(--bg)' }}
+              />
+              <button onClick={handleSaveBalance} disabled={savingBalance} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: '#059669', color: '#fff', border: 'none', cursor: 'pointer' }}>
+                {savingBalance ? '...' : 'Save'}
+              </button>
+              <button onClick={() => setEditingBalance(false)} style={{ padding: '4px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: 'var(--bg)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              {manualOverride != null && (
+                <button onClick={handleClearOverride} disabled={savingBalance} style={{ padding: '4px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: 'var(--bg)', color: '#b45309', border: '1px solid rgba(245,158,11,0.3)', cursor: 'pointer' }} title="Revert to calculated balance">
+                  Reset
+                </button>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: balance >= 0 ? '#059669' : '#ef4444' }}>{mc(_fmt(balance))}</div>
+              <button
+                onClick={() => { setBalanceInput(String(balance)); setEditingBalance(true); }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--text-dim)', display: 'inline-flex', alignItems: 'center' }}
+                title="Edit balance manually"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+              </button>
+            </div>
+          )}
+          {manualOverride != null && !editingBalance && (
+            <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>
+              Calculated: {_fmt(calculatedBalance)}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Add top-up */}

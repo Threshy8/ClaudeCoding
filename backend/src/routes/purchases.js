@@ -381,7 +381,7 @@ router.post('/germandrop/order-costs', async (req, res) => {
 });
 
 // ── GET /api/purchases/germandrop/balance ────────────────────────────────────
-// Returns the current GermanDrop wallet balance (topups - order costs)
+// Returns the current GermanDrop wallet balance — manual override if set, else calculated
 router.get('/germandrop/balance', async (req, res) => {
   try {
     const { data: topups, error: tErr } = await supabase
@@ -396,9 +396,55 @@ router.get('/germandrop/balance', async (req, res) => {
 
     const totalTopups = (topups || []).reduce((s, t) => s + (parseFloat(t.amount_aud) || 0), 0);
     const totalSpent = (costs || []).reduce((s, c) => s + (parseFloat(c.shipping_cost) || 0), 0);
-    const balance = totalTopups - totalSpent;
+    const calculatedBalance = totalTopups - totalSpent;
 
-    res.json({ balance_aud: Math.round(balance * 100) / 100, total_topups: totalTopups, total_spent: totalSpent });
+    // Check for manual override
+    const { data: override } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'germandrop_balance_override')
+      .single();
+
+    const manualBalance = override ? parseFloat(override.value) : null;
+    const balance = manualBalance != null ? manualBalance : calculatedBalance;
+
+    res.json({
+      balance_aud: Math.round(balance * 100) / 100,
+      total_topups: totalTopups,
+      total_spent: totalSpent,
+      calculated_balance: Math.round(calculatedBalance * 100) / 100,
+      manual_override: manualBalance,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/purchases/germandrop/balance ───────────────────────────────────
+// Set a manual balance override
+router.post('/germandrop/balance', async (req, res) => {
+  const { balance_aud } = req.body;
+  if (balance_aud == null) {
+    return res.status(400).json({ error: 'balance_aud is required' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({ key: 'germandrop_balance_override', value: String(balance_aud) }, { onConflict: 'key' });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, balance_aud: parseFloat(balance_aud) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/purchases/germandrop/balance ─────────────────────────────────
+// Clear the manual override, revert to calculated balance
+router.delete('/germandrop/balance', async (req, res) => {
+  try {
+    await supabase.from('app_settings').delete().eq('key', 'germandrop_balance_override');
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

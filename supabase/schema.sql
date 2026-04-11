@@ -146,3 +146,13 @@ CREATE TABLE IF NOT EXISTS capital_expenses (
   notes TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============================================================
+-- App Settings (key-value store for manual overrides etc.)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
