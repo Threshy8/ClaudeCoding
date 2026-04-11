@@ -138,15 +138,18 @@ router.get('/status', async (req, res) => {
       return res.json({ connected: false, tenant_name: null });
     }
 
-    // Try to get org name
+    // Attempt to authenticate (refreshes token if expired)
     let tenantName = null;
     try {
       const { xero, tenantId } = await getAuthenticatedClient();
       await xero.updateTenants();
       const tenant = xero.tenants.find(t => t.tenantId === tenantId);
       tenantName = tenant?.tenantName || null;
-    } catch {
-      // Token may be invalid
+    } catch (authErr) {
+      // Token refresh failed — connection is no longer valid
+      console.error('Xero status: token invalid, clearing:', authErr.message);
+      await supabase.from('xero_tokens').delete().neq('id', 0);
+      return res.json({ connected: false, tenant_name: null });
     }
 
     res.json({ connected: true, tenant_name: tenantName });
