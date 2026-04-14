@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { getCapitalExpenses, createCapitalExpense, deleteCapitalExpense, parseCapitalReceipt } from '../api';
+import { getCapitalExpenses, createCapitalExpense, updateCapitalExpense, deleteCapitalExpense, parseCapitalReceipt } from '../api';
 
 const CATEGORIES = ['Machinery', 'Equipment', 'Furniture', 'Vehicle', 'Technology', 'Other'];
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -164,6 +164,35 @@ export default function CapitalExpensesTab() {
     setDragOver(false);
     const file = e.dataTransfer?.files?.[0];
     if (file) processFile(file);
+  };
+
+  // Inline edit state: { id, field, value }
+  const [editing, setEditing] = useState(null);
+
+  const startEdit = (item, field) => {
+    let value = item[field];
+    if (field === 'amount') value = Number(value).toFixed(2);
+    setEditing({ id: item.id, field, value: value ?? '' });
+  };
+
+  const commitEdit = async () => {
+    if (!editing) return;
+    const { id, field, value } = editing;
+    const item = items.find(i => i.id === id);
+    const original = field === 'amount' ? Number(item[field]).toFixed(2) : (item[field] ?? '');
+    if (String(value) === String(original)) { setEditing(null); return; }
+    try {
+      const updated = await updateCapitalExpense(id, { [field]: value });
+      setItems(prev => prev.map(i => i.id === id ? { ...i, ...updated } : i));
+    } catch (err) {
+      setError(err.message);
+    }
+    setEditing(null);
+  };
+
+  const handleEditKeyDown = (e) => {
+    if (e.key === 'Enter') { e.target.blur(); }
+    if (e.key === 'Escape') { setEditing(null); }
   };
 
   const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
@@ -351,18 +380,37 @@ export default function CapitalExpensesTab() {
               <tr><td colSpan={6} style={st.emptyCell}>No capital expenses recorded yet</td></tr>
             ) : items.map((item, idx) => {
               const catColor = CATEGORY_COLORS[item.category] || CATEGORY_COLORS.Other;
+              const isEditing = (field) => editing?.id === item.id && editing?.field === field;
               return (
                 <tr key={item.id} style={{ background: idx % 2 === 1 ? 'var(--bg-alt)' : 'transparent' }}>
-                  <td style={st.td}>{fmtDate(item.purchase_date)}</td>
-                  <td style={{ ...st.td, fontWeight: 500, color: 'var(--text)' }}>{item.name}</td>
-                  <td style={st.td}>
-                    <span style={{ ...st.badge, background: catColor.bg, color: catColor.text }}>{item.category}</span>
+                  <td style={{ ...st.td, cursor: 'pointer' }} onClick={() => !isEditing('purchase_date') && startEdit(item, 'purchase_date')}>
+                    {isEditing('purchase_date') ? (
+                      <input type="date" autoFocus value={editing.value} onChange={e => setEditing(p => ({ ...p, value: e.target.value }))} onBlur={commitEdit} onKeyDown={handleEditKeyDown} style={st.inlineInput} />
+                    ) : fmtDate(item.purchase_date)}
                   </td>
-                  <td style={{ ...st.td, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--text)' }}>
-                    {fmtCurrency(item.amount)}
+                  <td style={{ ...st.td, fontWeight: 500, color: 'var(--text)', cursor: 'pointer' }} onClick={() => !isEditing('name') && startEdit(item, 'name')}>
+                    {isEditing('name') ? (
+                      <input autoFocus value={editing.value} onChange={e => setEditing(p => ({ ...p, value: e.target.value }))} onBlur={commitEdit} onKeyDown={handleEditKeyDown} style={st.inlineInput} />
+                    ) : item.name}
                   </td>
-                  <td style={{ ...st.td, color: 'var(--text-muted)', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {item.notes || '-'}
+                  <td style={{ ...st.td, cursor: 'pointer' }} onClick={() => !isEditing('category') && startEdit(item, 'category')}>
+                    {isEditing('category') ? (
+                      <select autoFocus value={editing.value} onChange={async (e) => { const val = e.target.value; setEditing(null); try { const updated = await updateCapitalExpense(item.id, { category: val }); setItems(prev => prev.map(i => i.id === item.id ? { ...i, ...updated } : i)); } catch (err) { setError(err.message); } }} onBlur={commitEdit} onKeyDown={handleEditKeyDown} style={st.inlineInput}>
+                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    ) : (
+                      <span style={{ ...st.badge, background: catColor.bg, color: catColor.text }}>{item.category}</span>
+                    )}
+                  </td>
+                  <td style={{ ...st.td, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--text)', cursor: 'pointer' }} onClick={() => !isEditing('amount') && startEdit(item, 'amount')}>
+                    {isEditing('amount') ? (
+                      <input type="number" step="0.01" autoFocus value={editing.value} onChange={e => setEditing(p => ({ ...p, value: e.target.value }))} onBlur={commitEdit} onKeyDown={handleEditKeyDown} style={{ ...st.inlineInput, textAlign: 'right' }} />
+                    ) : fmtCurrency(item.amount)}
+                  </td>
+                  <td style={{ ...st.td, color: 'var(--text-muted)', fontSize: 12, maxWidth: 200, cursor: 'pointer' }} onClick={() => !isEditing('notes') && startEdit(item, 'notes')}>
+                    {isEditing('notes') ? (
+                      <input autoFocus value={editing.value} onChange={e => setEditing(p => ({ ...p, value: e.target.value }))} onBlur={commitEdit} onKeyDown={handleEditKeyDown} style={st.inlineInput} />
+                    ) : (item.notes || '-')}
                   </td>
                   <td style={{ ...st.td, textAlign: 'center' }}>
                     <button onClick={() => handleDelete(item.id)} style={st.trashBtn} title="Delete">
@@ -474,6 +522,11 @@ const st = {
   badge: {
     display: 'inline-block', padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
     whiteSpace: 'nowrap',
+  },
+  inlineInput: {
+    padding: '4px 8px', borderRadius: 4, border: '1px solid var(--accent)',
+    fontSize: 13, background: 'var(--bg)', outline: 'none', width: '100%',
+    boxSizing: 'border-box',
   },
   trashBtn: {
     background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)',

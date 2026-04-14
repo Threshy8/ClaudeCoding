@@ -40,6 +40,31 @@ router.post('/', async (req, res) => {
   res.json(data);
 });
 
+// PATCH /api/capital-expenses/:id — update a single field
+router.patch('/:id', async (req, res) => {
+  const { id } = req.params;
+  const allowed = ['name', 'category', 'amount', 'purchase_date', 'notes'];
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) {
+      updates[key] = key === 'amount' ? parseFloat(req.body[key]) : req.body[key];
+    }
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No valid fields to update' });
+  }
+
+  const { data, error } = await supabase
+    .from('capital_expenses')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 // DELETE /api/capital-expenses/:id — delete entry
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;

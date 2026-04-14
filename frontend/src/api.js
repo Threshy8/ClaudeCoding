@@ -62,6 +62,8 @@ export const getCapitalExpenses = (startDate, endDate) => {
 };
 export const createCapitalExpense = (body) =>
   request('/api/capital-expenses', { method: 'POST', body: JSON.stringify(body) });
+export const updateCapitalExpense = (id, updates) =>
+  request(`/api/capital-expenses/${id}`, { method: 'PATCH', body: JSON.stringify(updates) });
 export const deleteCapitalExpense = (id) =>
   request(`/api/capital-expenses/${id}`, { method: 'DELETE' });
 export const parseCapitalReceipt = ({ text, image_base64, media_type }) =>
