@@ -1,19 +1,15 @@
 const express = require('express');
-const { XeroClient } = require('xero-node');
+const axios = require('axios');
+const crypto = require('crypto');
 const supabase = require('../db/supabase');
 
 const router = express.Router();
 
 const SCOPES = 'openid profile email offline_access accounting.reports.profitandloss.read accounting.settings.read';
-
-function createXeroClient() {
-  return new XeroClient({
-    clientId: process.env.XERO_CLIENT_ID,
-    clientSecret: process.env.XERO_CLIENT_SECRET,
-    redirectUris: [process.env.XERO_REDIRECT_URI],
-    scopes: SCOPES.split(' '),
-  });
-}
+const XERO_AUTH_URL = 'https://login.xero.com/identity/connect/authorize';
+const XERO_TOKEN_URL = 'https://identity.xero.com/connect/token';
+const XERO_CONNECTIONS_URL = 'https://api.xero.com/connections';
+const XERO_TIMEOUT = 15000;
 
 // Ensure xero_tokens table exists
 async function ensureTable() {
@@ -61,45 +57,51 @@ async function saveToken(tokenData) {
   }
 }
 
-// Build an authenticated XeroClient from stored tokens
-async function getAuthenticatedClient() {
+// Get authenticated access token, refreshing if expired
+async function getAuthenticatedTokens() {
   const stored = await getStoredToken();
   if (!stored) throw new Error('No Xero connection found');
 
-  const xero = createXeroClient();
-
-  // Set the token set on the client
-  xero.setTokenSet({
-    access_token: stored.access_token,
-    refresh_token: stored.refresh_token,
-    expires_at: Math.floor(new Date(stored.expires_at).getTime() / 1000),
-    token_type: 'Bearer',
-    scope: SCOPES,
-  });
-
-  // Check if token is expired and refresh if needed
   const expiresAt = new Date(stored.expires_at);
   if (expiresAt <= new Date()) {
-    const newTokenSet = await xero.refreshToken();
+    // Refresh the token
+    const tokenRes = await axios.post(XERO_TOKEN_URL, new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: stored.refresh_token,
+    }).toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      auth: { username: process.env.XERO_CLIENT_ID, password: process.env.XERO_CLIENT_SECRET },
+      timeout: XERO_TIMEOUT,
+    });
+
+    const newTokens = tokenRes.data;
     await saveToken({
-      access_token: newTokenSet.access_token,
-      refresh_token: newTokenSet.refresh_token,
-      expires_at: new Date(newTokenSet.expires_at * 1000).toISOString(),
+      access_token: newTokens.access_token,
+      refresh_token: newTokens.refresh_token,
+      expires_at: new Date(Date.now() + newTokens.expires_in * 1000).toISOString(),
       tenant_id: stored.tenant_id,
     });
+
+    return { accessToken: newTokens.access_token, tenantId: stored.tenant_id };
   }
 
-  return { xero, tenantId: stored.tenant_id };
+  return { accessToken: stored.access_token, tenantId: stored.tenant_id };
 }
 
 // ---- Routes ----
 
-// GET /connect — initiate OAuth2 flow
-router.get('/connect', async (req, res) => {
+// GET /connect — initiate OAuth2 flow (no outgoing requests, just redirect)
+router.get('/connect', (req, res) => {
   try {
-    const xero = createXeroClient();
-    const consentUrl = await xero.buildConsentUrl();
-    res.redirect(consentUrl);
+    const state = crypto.randomBytes(16).toString('hex');
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: process.env.XERO_CLIENT_ID,
+      redirect_uri: process.env.XERO_REDIRECT_URI,
+      scope: SCOPES,
+      state,
+    });
+    res.redirect(`${XERO_AUTH_URL}?${params.toString()}`);
   } catch (err) {
     console.error('Xero connect error:', err);
     res.status(500).json({ error: err.message });
@@ -109,17 +111,34 @@ router.get('/connect', async (req, res) => {
 // GET /callback — handle OAuth2 callback
 router.get('/callback', async (req, res) => {
   try {
-    const xero = createXeroClient();
-    const tokenSet = await xero.apiCallback(req.url);
+    const { code } = req.query;
+    if (!code) throw new Error('No authorization code received');
 
-    await xero.updateTenants();
-    const activeTenant = xero.tenants[0];
+    // Exchange code for tokens
+    const tokenRes = await axios.post(XERO_TOKEN_URL, new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: process.env.XERO_REDIRECT_URI,
+    }).toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      auth: { username: process.env.XERO_CLIENT_ID, password: process.env.XERO_CLIENT_SECRET },
+      timeout: XERO_TIMEOUT,
+    });
+
+    const tokenSet = tokenRes.data;
+
+    // Get tenant (org) info
+    const connectionsRes = await axios.get(XERO_CONNECTIONS_URL, {
+      headers: { Authorization: `Bearer ${tokenSet.access_token}` },
+      timeout: XERO_TIMEOUT,
+    });
+    const activeTenant = connectionsRes.data?.[0];
 
     await ensureTable();
     await saveToken({
       access_token: tokenSet.access_token,
       refresh_token: tokenSet.refresh_token,
-      expires_at: new Date(tokenSet.expires_at * 1000).toISOString(),
+      expires_at: new Date(Date.now() + tokenSet.expires_in * 1000).toISOString(),
       tenant_id: activeTenant?.tenantId || null,
     });
 
@@ -138,15 +157,16 @@ router.get('/status', async (req, res) => {
       return res.json({ connected: false, tenant_name: null });
     }
 
-    // Attempt to authenticate (refreshes token if expired)
     let tenantName = null;
     try {
-      const { xero, tenantId } = await getAuthenticatedClient();
-      await xero.updateTenants();
-      const tenant = xero.tenants.find(t => t.tenantId === tenantId);
+      const { accessToken, tenantId } = await getAuthenticatedTokens();
+      const connectionsRes = await axios.get(XERO_CONNECTIONS_URL, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: XERO_TIMEOUT,
+      });
+      const tenant = connectionsRes.data?.find(t => t.tenantId === tenantId);
       tenantName = tenant?.tenantName || null;
     } catch (authErr) {
-      // Token refresh failed — connection is no longer valid
       console.error('Xero status: token invalid, clearing:', authErr.message);
       await supabase.from('xero_tokens').delete().neq('id', 0);
       return res.json({ connected: false, tenant_name: null });
@@ -167,28 +187,23 @@ router.get('/pnl', async (req, res) => {
       return res.status(400).json({ error: 'startDate and endDate query params required' });
     }
 
-    const { xero, tenantId } = await getAuthenticatedClient();
+    const { accessToken, tenantId } = await getAuthenticatedTokens();
 
-    const response = await xero.accountingApi.getReportProfitAndLoss(
-      tenantId,
-      startDate,       // fromDate
-      endDate,         // toDate
-      undefined,       // periods
-      undefined,       // timeframe
-      undefined,       // trackingCategoryID
-      undefined,       // trackingCategoryID2
-      undefined,       // trackingOptionID
-      undefined,       // trackingOptionID2
-      undefined,       // standardLayout
-      undefined,       // paymentsOnly
-    );
+    const response = await axios.get('https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Xero-Tenant-Id': tenantId,
+        Accept: 'application/json',
+      },
+      params: { fromDate: startDate, toDate: endDate },
+      timeout: XERO_TIMEOUT,
+    });
 
-    const report = response.body?.reports?.[0];
+    const report = response.data?.Reports?.[0];
     if (!report) {
       return res.status(404).json({ error: 'No P&L report returned from Xero' });
     }
 
-    // Parse the report rows into structured data
     const result = parsePnlReport(report);
     res.json(result);
   } catch (err) {
@@ -215,26 +230,36 @@ function parsePnlReport(report) {
   const sections = {};
   let currentSection = null;
 
-  for (const row of report.rows || []) {
-    if (row.rowType === 'Section' && row.title) {
-      currentSection = row.title;
+  // Xero REST API uses capital keys (Rows, RowType, Title, Cells, Value)
+  const rows = report.Rows || report.rows || [];
+
+  for (const row of rows) {
+    const rowType = row.RowType || row.rowType;
+    const title = row.Title || row.title;
+    const subRows = row.Rows || row.rows || [];
+    const cells = row.Cells || row.cells;
+
+    if (rowType === 'Section' && title) {
+      currentSection = title;
       sections[currentSection] = [];
-      for (const subRow of row.rows || []) {
-        if (subRow.rowType === 'Row' && subRow.cells) {
-          const label = subRow.cells[0]?.value || '';
-          const amount = parseFloat(subRow.cells[1]?.value) || 0;
+      for (const subRow of subRows) {
+        const subType = subRow.RowType || subRow.rowType;
+        const subCells = subRow.Cells || subRow.cells;
+        if (subType === 'Row' && subCells) {
+          const label = subCells[0]?.Value || subCells[0]?.value || '';
+          const amount = parseFloat(subCells[1]?.Value || subCells[1]?.value) || 0;
           sections[currentSection].push({ label, amount });
         }
-        if (subRow.rowType === 'SummaryRow' && subRow.cells) {
-          const label = subRow.cells[0]?.value || '';
-          const amount = parseFloat(subRow.cells[1]?.value) || 0;
+        if (subType === 'SummaryRow' && subCells) {
+          const label = subCells[0]?.Value || subCells[0]?.value || '';
+          const amount = parseFloat(subCells[1]?.Value || subCells[1]?.value) || 0;
           sections[currentSection].push({ label, amount, isSummary: true });
         }
       }
     }
-    if (row.rowType === 'Row' && row.cells) {
-      const label = row.cells[0]?.value || '';
-      const amount = parseFloat(row.cells[1]?.value) || 0;
+    if (rowType === 'Row' && cells) {
+      const label = cells[0]?.Value || cells[0]?.value || '';
+      const amount = parseFloat(cells[1]?.Value || cells[1]?.value) || 0;
       if (label.toLowerCase().includes('gross profit')) {
         sections['Gross Profit'] = [{ label, amount }];
       }
