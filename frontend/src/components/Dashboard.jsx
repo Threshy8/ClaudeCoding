@@ -124,6 +124,7 @@ export default function Dashboard({ dateRange }) {
   const [inventory, setInventory] = useState(null);
   const [freight, setFreight] = useState(null);
   const [payoutData, setPayoutData] = useState(null);
+  const [xeroIncome, setXeroIncome] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isFifo, setIsFifo] = useState(false);
@@ -173,12 +174,17 @@ export default function Dashboard({ dateRange }) {
     const payoutParams = new URLSearchParams({ start_date: dateRange.start, end_date: dateRange.end });
     const payoutPromise = apiFetch(`/api/payouts?${payoutParams}`).catch(() => null);
 
-    Promise.all([fifoPromise, invPromise, freightPromise, payoutPromise])
-      .then(([sku, inv, freight, payouts]) => {
+    const xeroPromise = apiFetch(`/api/xero/pnl?startDate=${dateRange.start}&endDate=${dateRange.end}`)
+      .then(data => data?.tradingIncome?.total ?? null)
+      .catch(() => null);
+
+    Promise.all([fifoPromise, invPromise, freightPromise, payoutPromise, xeroPromise])
+      .then(([sku, inv, freight, payouts, xeroInc]) => {
         setSkuData(sku);
         setInventory(inv);
         setFreight(freight);
         setPayoutData(payouts);
+        setXeroIncome(xeroInc);
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -247,9 +253,9 @@ export default function Dashboard({ dateRange }) {
     <div>
       <div className="kpi-grid">
         <div className="kpi-card">
-          <div className="kpi-label">{hasPayout ? 'PAYOUTS' : 'REVENUE'}</div>
-          <div className="kpi-value">{mc(_fmt(hasPayout ? payoutTotal : totalCollected))}</div>
-          <div className="kpi-sub">{hasPayout ? `${payoutSummary.payout_count} payout${payoutSummary.payout_count !== 1 ? 's' : ''} · ${rangeLabel}` : rangeLabel}</div>
+          <div className="kpi-label">{xeroIncome != null ? 'TRADING INCOME' : hasPayout ? 'PAYOUTS' : 'REVENUE'}</div>
+          <div className="kpi-value">{mc(_fmt(xeroIncome != null ? xeroIncome : hasPayout ? payoutTotal : totalCollected))}</div>
+          <div className="kpi-sub">{xeroIncome != null ? `From Xero · ${rangeLabel}` : hasPayout ? `${payoutSummary.payout_count} payout${payoutSummary.payout_count !== 1 ? 's' : ''} · ${rangeLabel}` : rangeLabel}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">True COGS</div>
