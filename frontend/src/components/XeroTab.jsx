@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { getXeroStatus, getXeroPnl, disconnectXero, getCapitalExpenses, getGermanDropBalance } from '../api';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
@@ -162,6 +163,11 @@ export default function XeroTab() {
         <button onClick={fetchPnl} disabled={pnlLoading} style={styles.fetchBtn}>
           {pnlLoading ? 'Loading...' : 'Refresh'}
         </button>
+        {pnlData && (
+          <button onClick={() => exportPnlToXlsx(pnlData, capexItems, gdBalance, dates, status?.tenant_name)} style={styles.exportBtn}>
+            Export .xlsx
+          </button>
+        )}
       </div>
 
       {pnlError && <div style={styles.errorBanner}>{pnlError}</div>}
@@ -170,7 +176,7 @@ export default function XeroTab() {
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>Loading P&amp;L data...</div>
       )}
 
-      {pnlData && <PnlTable data={pnlData} capexItems={capexItems} gdBalance={gdBalance} />}
+      {pnlData && <PnlTable data={pnlData} capexItems={capexItems} gdBalance={gdBalance} dates={dates} tenantName={status?.tenant_name} />}
     </div>
   );
 }
@@ -182,7 +188,98 @@ function pctOf(amount, revenue) {
 
 const GD_USD_TO_AUD = 1.45;
 
-function PnlTable({ data, capexItems = [], gdBalance = null }) {
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function buildExportFilename(dates, tenantName) {
+  const d = new Date(dates.start + 'T12:00:00');
+  const month = MONTH_NAMES[d.getMonth()];
+  const year = d.getFullYear();
+  const org = (tenantName || '88ROAS').replace(/[^a-zA-Z0-9]/g, '');
+  return `${org}_PL_${month}${year}.xlsx`;
+}
+
+function exportPnlToXlsx(data, capexItems, gdBalance, dates, tenantName) {
+  const revenue = data.tradingIncome.total;
+  const capexTotal = capexItems.reduce((s, i) => s + Number(i.amount || 0), 0);
+  const gdBalanceUsd = gdBalance && gdBalance.balance_aud > 0 ? gdBalance.balance_aud : 0;
+  const gdBalanceAud = Math.round(gdBalanceUsd * GD_USD_TO_AUD * 100) / 100;
+  const totalDeductions = capexTotal + gdBalanceAud;
+  const trueCos = data.costOfSales.total - totalDeductions;
+  const trueGrossProfit = revenue - trueCos;
+
+  const rows = [];
+  const pct = (v) => revenue ? ((v / revenue) * 100).toFixed(1) + '%' : '';
+
+  rows.push(['Account', 'Amount', '% of Revenue']);
+  rows.push([]);
+
+  // Trading Income
+  rows.push(['Trading Income', '', '']);
+  for (const [k, v] of Object.entries(data.tradingIncome)) {
+    if (k === 'total') continue;
+    rows.push(['  ' + k.replace(/_/g, ' '), v, pct(v)]);
+  }
+  rows.push(['Total Trading Income', data.tradingIncome.total, '100.0%']);
+  rows.push([]);
+
+  // Cost of Sales
+  rows.push(['Less Cost of Sales', '', '']);
+  for (const [k, v] of Object.entries(data.costOfSales)) {
+    if (k === 'total') continue;
+    rows.push(['  ' + k.replace(/_/g, ' '), v, pct(v)]);
+  }
+  rows.push(['Total Cost of Sales (Xero)', data.costOfSales.total, pct(data.costOfSales.total)]);
+
+  // Capital Items
+  if (capexTotal > 0) {
+    rows.push([]);
+    rows.push(['Less: Capital Items', '', '']);
+    for (const item of capexItems) {
+      rows.push(['  ' + item.name, -Number(item.amount), pct(Number(item.amount))]);
+    }
+    rows.push(['Total Capital Items', -capexTotal, pct(capexTotal)]);
+  }
+
+  // Prepaid Balances
+  if (gdBalanceAud > 0) {
+    rows.push([]);
+    rows.push(['Less: Prepaid Balances', '', '']);
+    rows.push([`  GermanDrop Wallet (US$${gdBalanceUsd.toFixed(2)} x ${GD_USD_TO_AUD})`, -gdBalanceAud, pct(gdBalanceAud)]);
+  }
+
+  // Adjusted totals
+  if (capexTotal > 0 || gdBalanceAud > 0) {
+    rows.push([]);
+    rows.push(['True Adjusted COGS', trueCos, pct(trueCos)]);
+  }
+
+  rows.push([]);
+  rows.push(['Gross Profit (Xero)', data.grossProfit, pct(data.grossProfit)]);
+
+  if (capexTotal > 0 || gdBalanceAud > 0) {
+    rows.push(['True Adjusted Gross Profit', trueGrossProfit, pct(trueGrossProfit)]);
+  }
+
+  rows.push([]);
+
+  // Operating Expenses
+  rows.push(['Less Operating Expenses', '', '']);
+  for (const [label, amount] of Object.entries(data.operatingExpenses)) {
+    rows.push(['  ' + label, amount, pct(amount)]);
+  }
+  rows.push(['Total Operating Expenses', data.totalOperatingExpenses, pct(data.totalOperatingExpenses)]);
+  rows.push([]);
+  rows.push(['Net Profit', data.netProfit, pct(data.netProfit)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  // Set column widths
+  ws['!cols'] = [{ wch: 40 }, { wch: 16 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'P&L');
+  XLSX.writeFile(wb, buildExportFilename(dates, tenantName));
+}
+
+function PnlTable({ data, capexItems = [], gdBalance = null, dates, tenantName }) {
   const revenue = data.tradingIncome.total;
   const capexTotal = capexItems.reduce((s, i) => s + Number(i.amount || 0), 0);
   const hasCapex = capexTotal > 0;
@@ -413,6 +510,16 @@ const styles = {
     background: '#1a1a1a',
     color: '#fff',
     border: 'none',
+    cursor: 'pointer',
+  },
+  exportBtn: {
+    padding: '7px 18px',
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: 600,
+    background: 'var(--bg-card)',
+    color: 'var(--text)',
+    border: '1px solid var(--border)',
     cursor: 'pointer',
   },
   successBanner: {
