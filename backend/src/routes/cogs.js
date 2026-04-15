@@ -1654,6 +1654,17 @@ router.get('/forecast/peak-period', async (req, res) => {
 
 // ── GET /api/inventory/valuation ─────────────────────────────────────────────
 // Simple inventory valuation from purchases table (units on hand × cost)
+
+const SHIPPING_PER_UNIT = {
+  BLK2ATS: 6.45, BRN2ATS: 6.45,
+  BLK1CAR: 2.30, BRN1CAR: 2.30,
+  GRN1CYC: 2.05, WHT1CYC: 2.05,
+  BLK1VYG: 0.37, BLK2VYG: 0.60, BLK3VYG: 0.89,
+  BLK2TAU: 14.34, WHT2TAU: 14.51, GRY2TAU: 14.51,
+  BLK4LEO: 18.45, GRY4LEO: 18.21, WHT4LEO: 18.41,
+  BLK6IMP: 23.70, WHT6IMP: 23.70, GRY6IMP: 23.70,
+};
+
 router.get('/inventory/valuation', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -1674,7 +1685,11 @@ router.get('/inventory/valuation', async (req, res) => {
 
     const items = Object.values(map)
       .filter(i => i.units > 0)
-      .map(i => ({ ...i, total_value: Math.round(i.units * i.unit_cost * 100) / 100 }))
+      .map(i => ({
+        ...i,
+        shipping_per_unit: SHIPPING_PER_UNIT[i.sku] || null,
+        total_value: Math.round(i.units * i.unit_cost * 100) / 100,
+      }))
       .sort((a, b) => a.product_name.localeCompare(b.product_name));
 
     const grand_total = Math.round(items.reduce((s, i) => s + i.total_value, 0) * 100) / 100;
