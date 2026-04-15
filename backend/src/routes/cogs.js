@@ -1652,6 +1652,40 @@ router.get('/forecast/peak-period', async (req, res) => {
   }
 });
 
+// ── GET /api/inventory/valuation ─────────────────────────────────────────────
+// Simple inventory valuation from purchases table (units on hand × cost)
+router.get('/inventory/valuation', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('purchases')
+      .select('sku, product_name, quantity_remaining, unit_cost');
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Group by sku + unit_cost
+    const map = {};
+    for (const row of (data || [])) {
+      const key = `${row.sku}|${row.unit_cost}`;
+      if (!map[key]) {
+        map[key] = { sku: row.sku, product_name: row.product_name, units: 0, unit_cost: parseFloat(row.unit_cost) };
+      }
+      map[key].units += row.quantity_remaining || 0;
+    }
+
+    const items = Object.values(map)
+      .filter(i => i.units > 0)
+      .map(i => ({ ...i, total_value: Math.round(i.units * i.unit_cost * 100) / 100 }))
+      .sort((a, b) => a.product_name.localeCompare(b.product_name));
+
+    const grand_total = Math.round(items.reduce((s, i) => s + i.total_value, 0) * 100) / 100;
+
+    res.json({ items, grand_total });
+  } catch (err) {
+    console.error('Inventory valuation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/cogs/recompute — full FIFO recompute from scratch
 const { recomputeAllCogs } = require('../utils/fifo');
 

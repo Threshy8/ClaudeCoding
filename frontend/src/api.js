@@ -72,6 +72,9 @@ export const parseCapitalReceipt = ({ text, image_base64, media_type }) =>
 // GermanDrop wallet
 export const getGermanDropBalance = () => request('/api/purchases/germandrop/balance');
 
+// Inventory Valuation
+export const getInventoryValuation = () => request('/api/inventory/valuation');
+
 // Xero
 export const getXeroStatus = () => request('/api/xero/status');
 export const getXeroPnl = (startDate, endDate) =>

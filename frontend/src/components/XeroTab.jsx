@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import * as XLSX from 'xlsx';
-import { getXeroStatus, getXeroPnl, disconnectXero, getCapitalExpenses, getGermanDropBalance } from '../api';
+import { getXeroStatus, getXeroPnl, disconnectXero, getCapitalExpenses, getGermanDropBalance, getInventoryValuation } from '../api';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -28,6 +28,8 @@ export default function XeroTab() {
   const [successMsg, setSuccessMsg] = useState(null);
   const [capexItems, setCapexItems] = useState([]);
   const [gdBalance, setGdBalance] = useState(null);
+  const [valuation, setValuation] = useState(null);
+  const [valuationLoading, setValuationLoading] = useState(false);
 
   // Check for ?connected=true in URL on mount
   useEffect(() => {
@@ -76,10 +78,25 @@ export default function XeroTab() {
     }
   }, [dates]);
 
+  const fetchValuation = useCallback(async () => {
+    setValuationLoading(true);
+    try {
+      const data = await getInventoryValuation();
+      setValuation(data);
+    } catch {
+      setValuation(null);
+    } finally {
+      setValuationLoading(false);
+    }
+  }, []);
+
   // Auto-fetch P&L when connected
   useEffect(() => {
     if (status?.connected) fetchPnl();
   }, [status?.connected, fetchPnl]);
+
+  // Always fetch inventory valuation on mount
+  useEffect(() => { fetchValuation(); }, [fetchValuation]);
 
   const handleDisconnect = async () => {
     if (!window.confirm('Disconnect from Xero?')) return;
@@ -177,6 +194,20 @@ export default function XeroTab() {
       )}
 
       {pnlData && <PnlTable data={pnlData} capexItems={capexItems} gdBalance={gdBalance} dates={dates} tenantName={status?.tenant_name} />}
+
+      {/* Inventory Valuation */}
+      <div style={{ marginTop: 32 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Inventory Valuation</h2>
+          <button onClick={fetchValuation} disabled={valuationLoading} style={styles.fetchBtn}>
+            {valuationLoading ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
+        {valuationLoading && !valuation && (
+          <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>Loading valuation...</div>
+        )}
+        {valuation && <ValuationTable data={valuation} />}
+      </div>
     </div>
   );
 }
@@ -403,6 +434,39 @@ function PnlTable({ data, capexItems = [], gdBalance = null, dates, tenantName }
 
           {/* Net Profit */}
           <HighlightRow label="Net Profit" amount={data.netProfit} pct={pctOf(data.netProfit, revenue)} bold />
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ValuationTable({ data }) {
+  return (
+    <div style={styles.card}>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>SKU</th>
+            <th style={styles.th}>Product</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Units on Hand</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Cost/Unit</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Total Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.items.map(item => (
+            <tr key={item.sku}>
+              <td style={{ padding: '6px 12px', fontSize: 13, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{item.sku}</td>
+              <td style={{ padding: '6px 12px', fontSize: 13, color: 'var(--text-body)' }}>{item.product_name}</td>
+              <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{item.units.toLocaleString()}</td>
+              <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(item.unit_cost)}</td>
+              <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(item.total_value)}</td>
+            </tr>
+          ))}
+          <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--accent-dim2)' }}>
+            <td colSpan={4} style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700 }}>Grand Total</td>
+            <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(data.grand_total)}</td>
+          </tr>
         </tbody>
       </table>
     </div>
