@@ -154,9 +154,28 @@ export default function InventoryTab() {
   const loadData = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch(`${BASE_URL}/api/inventory/summary?store=au`)
+    fetch(`${BASE_URL}/api/inventory/valuation`)
       .then(r => { if (!r.ok) throw new Error('Failed to load inventory'); return r.json(); })
-      .then(setData)
+      .then(raw => {
+        // Transform valuation response to match expected shape
+        const skus = (raw.items || []).map(item => ({
+          sku: item.sku,
+          product_name: item.product_name,
+          quantity_remaining: item.units,
+          unit_cost: item.unit_cost,
+          inventory_value: item.total_value,
+          retail_value: item.retail_value || 0,
+          retail_price: item.retail_price || 0,
+          shipping_per_unit: item.shipping_per_unit || 0,
+          scc_stock: item.units,
+          gd_stock: 0,
+          locations: ['SCC'],
+          units_sold_this_month: 0,
+          po_numbers: [],
+          low_stock: item.units < 10,
+        }));
+        setData({ skus });
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
