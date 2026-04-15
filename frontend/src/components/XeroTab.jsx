@@ -445,11 +445,19 @@ const valNum = { padding: '6px 8px', fontSize: 12, textAlign: 'right', fontVaria
 function ValuationTable({ data }) {
   return (
     <div style={{ ...styles.card, overflowX: 'auto' }}>
-      <table style={{ ...styles.table, minWidth: 820 }}>
+      <table style={{ ...styles.table, minWidth: 700, tableLayout: 'fixed' }}>
+        <colgroup>
+          <col style={{ width: '25%' }} />
+          <col style={{ width: '8%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '11%' }} />
+          <col style={{ width: '15%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '17%' }} />
+        </colgroup>
         <thead>
           <tr>
-            <th style={{ ...styles.th, width: 90 }}>SKU</th>
-            <th style={{ ...styles.th, width: 160 }}>Product</th>
+            <th style={styles.th}>Product</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Units</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Cost/Unit</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Ship/Unit</th>
@@ -461,8 +469,7 @@ function ValuationTable({ data }) {
         <tbody>
           {data.items.map(item => (
             <tr key={item.sku}>
-              <td style={{ padding: '6px 8px', fontSize: 12, color: 'var(--text-muted)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{item.sku}</td>
-              <td style={{ padding: '6px 8px', fontSize: 12, color: 'var(--text-body)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.product_name}</td>
+              <td style={{ padding: '6px 8px', fontSize: 12, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.product_name}</td>
               <td style={valNum}>{item.units.toLocaleString()}</td>
               <td style={valNum}>{formatCurrency(item.unit_cost)}</td>
               <td style={{ ...valNum, color: 'var(--text-muted)' }}>{item.shipping_per_unit != null ? formatCurrency(item.shipping_per_unit) : '—'}</td>
@@ -472,7 +479,7 @@ function ValuationTable({ data }) {
             </tr>
           ))}
           <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--accent-dim2)' }}>
-            <td colSpan={5} style={{ padding: '8px 8px', fontSize: 13, fontWeight: 700 }}>Grand Total</td>
+            <td colSpan={4} style={{ padding: '8px 8px', fontSize: 13, fontWeight: 700 }}>Grand Total</td>
             <td style={{ padding: '8px 8px', fontSize: 13, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{formatCurrency(data.grand_total)}</td>
             <td></td>
             <td style={{ padding: '8px 8px', fontSize: 13, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{formatCurrency(data.grand_total_retail)}</td>
