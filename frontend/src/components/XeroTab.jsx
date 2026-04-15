@@ -452,6 +452,8 @@ function ValuationTable({ data }) {
             <th style={{ ...styles.th, textAlign: 'right' }}>Cost/Unit</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Shipping/Unit</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Total Value</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Retail Price</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Retail Value</th>
           </tr>
         </thead>
         <tbody>
@@ -463,11 +465,15 @@ function ValuationTable({ data }) {
               <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(item.unit_cost)}</td>
               <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--text-muted)' }}>{item.shipping_per_unit != null ? formatCurrency(item.shipping_per_unit) : '—'}</td>
               <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(item.total_value)}</td>
+              <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--text-muted)' }}>{item.retail_price != null ? formatCurrency(item.retail_price) : '—'}</td>
+              <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{item.retail_value != null ? formatCurrency(item.retail_value) : '—'}</td>
             </tr>
           ))}
           <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--accent-dim2)' }}>
             <td colSpan={5} style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700 }}>Grand Total</td>
             <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(data.grand_total)}</td>
+            <td></td>
+            <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(data.grand_total_retail)}</td>
           </tr>
         </tbody>
       </table>

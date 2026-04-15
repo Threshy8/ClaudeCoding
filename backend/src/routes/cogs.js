@@ -1665,6 +1665,16 @@ const SHIPPING_PER_UNIT = {
   BLK6IMP: 23.70, WHT6IMP: 23.70, GRY6IMP: 23.70,
 };
 
+const RETAIL_PRICE = {
+  BLK2ATS: 211.00, BRN2ATS: 211.00,
+  BLK1CAR: 169.00, BRN1CAR: 169.00,
+  GRN1CYC: 160.00, WHT1CYC: 160.00,
+  BLK1VYG: 84.00, BLK2VYG: 109.00, BLK3VYG: 135.00,
+  BLK2TAU: 509.00, WHT2TAU: 509.00, GRY2TAU: 509.00,
+  BLK4LEO: 764.00, GRY4LEO: 764.00, WHT4LEO: 764.00,
+  BLK6IMP: 1274.00, WHT6IMP: 1274.00, GRY6IMP: 1274.00,
+};
+
 router.get('/inventory/valuation', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -1685,16 +1695,22 @@ router.get('/inventory/valuation', async (req, res) => {
 
     const items = Object.values(map)
       .filter(i => i.units > 0)
-      .map(i => ({
-        ...i,
-        shipping_per_unit: SHIPPING_PER_UNIT[i.sku] || null,
-        total_value: Math.round(i.units * i.unit_cost * 100) / 100,
-      }))
+      .map(i => {
+        const retail_price = RETAIL_PRICE[i.sku] || null;
+        return {
+          ...i,
+          shipping_per_unit: SHIPPING_PER_UNIT[i.sku] || null,
+          total_value: Math.round(i.units * i.unit_cost * 100) / 100,
+          retail_price,
+          retail_value: retail_price != null ? Math.round(i.units * retail_price * 100) / 100 : null,
+        };
+      })
       .sort((a, b) => a.product_name.localeCompare(b.product_name));
 
     const grand_total = Math.round(items.reduce((s, i) => s + i.total_value, 0) * 100) / 100;
+    const grand_total_retail = Math.round(items.reduce((s, i) => s + (i.retail_value || 0), 0) * 100) / 100;
 
-    res.json({ items, grand_total });
+    res.json({ items, grand_total, grand_total_retail });
   } catch (err) {
     console.error('Inventory valuation error:', err.message);
     res.status(500).json({ error: err.message });
