@@ -199,9 +199,16 @@ export default function XeroTab() {
       <div style={{ marginTop: 32 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Inventory Valuation</h2>
-          <button onClick={fetchValuation} disabled={valuationLoading} style={styles.fetchBtn}>
-            {valuationLoading ? 'Loading...' : 'Refresh'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={fetchValuation} disabled={valuationLoading} style={styles.fetchBtn}>
+              {valuationLoading ? 'Loading...' : 'Refresh'}
+            </button>
+            {valuation && (
+              <button onClick={() => exportValuationCsv(valuation)} style={styles.exportBtn}>
+                Export to Xero Journal
+              </button>
+            )}
+          </div>
         </div>
         {valuationLoading && !valuation && (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>Loading valuation...</div>
@@ -308,6 +315,35 @@ function exportPnlToXlsx(data, capexItems, gdBalance, dates, tenantName) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'P&L');
   XLSX.writeFile(wb, buildExportFilename(dates, tenantName));
+}
+
+function exportValuationCsv(data) {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yyyy = now.getFullYear();
+  const dateStr = `${dd}/${mm}/${yyyy}`;
+  const narration = `Opening Inventory Valuation - ${dateStr}`;
+
+  const esc = (v) => {
+    const s = String(v);
+    return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const rows = ['Narration,Date,Description,Account,Tax Rate,Debit,Credit'];
+  for (const item of data.items) {
+    const desc = `${item.product_name} (${item.units} units)`;
+    rows.push(`${esc(narration)},${dateStr},${esc(desc)},Inventory Asset,BAS Excluded,${item.total_value.toFixed(2)},`);
+  }
+  rows.push(`${esc(narration)},${dateStr},Total Inventory Value,Cost of Goods Sold,BAS Excluded,,${data.grand_total.toFixed(2)}`);
+
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Inventory_Journal_${yyyy}-${mm}-${dd}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function PnlTable({ data, capexItems = [], gdBalance = null, dates, tenantName }) {
