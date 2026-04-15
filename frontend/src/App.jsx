@@ -1,12 +1,12 @@
 import React, { useState, useCallback } from 'react';
 import Dashboard from './components/Dashboard';
 import PurchasesTab from './components/PurchasesTab';
-import SalesCogsTab from './components/SalesCogsTab';
+
 import JournalTab from './components/JournalTab';
 import FulfillmentTab from './components/FulfillmentTab';
 import RefundsTab from './components/RefundsTab';
 import InventoryTab from './components/InventoryTab';
-import ForecastTab from './components/ForecastTab';
+
 import XeroTab from './components/XeroTab';
 import CapitalExpensesTab from './components/CapitalExpensesTab';
 import DateRangePicker from './components/DateRangePicker';
@@ -14,7 +14,7 @@ import { DemoModeContext } from './contexts/DemoModeContext';
 import { syncShopify, syncRedo } from './api';
 import './App.css';
 
-const TABS = ['Dashboard', 'Inventory', 'Forecast', 'Stock Purchases', 'Sales & COGS', '3PL Costs', 'Refunds', 'Journal Export', 'Capital Expenses', 'Xero'];
+const TABS = ['Dashboard', 'Inventory', 'Stock Purchases', '3PL Costs', 'Refunds', 'Journal Export', 'Capital Expenses', 'Xero'];
 const APP_PASSWORD = process.env.REACT_APP_PASSWORD || 'watchbox2024';
 
 function defaultRange() {
@@ -200,9 +200,7 @@ export default function App() {
         <main className="main-content">
           {activeTab === 'Dashboard'      && <Dashboard     dateRange={dateRange} />}
           {activeTab === 'Inventory'       && <InventoryTab />}
-          {activeTab === 'Forecast'        && <ForecastTab />}
           {activeTab === 'Stock Purchases' && <PurchasesTab />}
-          {activeTab === 'Sales & COGS'   && <SalesCogsTab  dateRange={dateRange} />}
           {activeTab === '3PL Costs'      && <FulfillmentTab dateRange={dateRange} />}
           {activeTab === 'Refunds'         && <RefundsTab    dateRange={dateRange} />}
           {activeTab === 'Journal Export'  && <JournalTab    dateRange={dateRange} />}
