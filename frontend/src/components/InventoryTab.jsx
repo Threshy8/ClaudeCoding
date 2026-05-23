@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { useDemoMask } from '../contexts/DemoModeContext';
 import { BASE_URL, apiFetch, formatCurrency as _fmt } from '../utils';
 
@@ -187,18 +188,41 @@ export default function InventoryTab() {
     if (!file) return;
     setUploading(true); setUploadResult(null);
     try {
-      const text = await file.text();
-      const rows = parseCsvText(text);
-      if (rows.length === 0) throw new Error('No data rows found in CSV');
+      let rows;
+      const isExcel = /\.xlsx?$/i.test(file.name) ||
+        file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+        file.type === 'application/vnd.ms-excel';
 
-      // Find SKU and count columns — support multiple naming conventions
+      if (isExcel) {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        // Normalize headers to uppercase trimmed
+        rows = jsonRows.map(r => {
+          const norm = {};
+          for (const [k, v] of Object.entries(r)) {
+            norm[k.trim().toUpperCase().replace(/\s+/g, ' ')] = typeof v === 'string' ? v : String(v);
+          }
+          return norm;
+        });
+      } else {
+        const text = await file.text();
+        rows = parseCsvText(text);
+      }
+      if (rows.length === 0) throw new Error('No data rows found in file');
+
+      // Find SKU and count columns — case-insensitive with aliases
       const first = rows[0];
       const headers = Object.keys(first);
-      const skuCol = headers.find(h => h === 'EXTERNALID' || h === 'SKU' || h === 'EXTERNAL ID' || h === 'ITEM');
-      const countCol = headers.find(h => h === 'PHYSICAL' || h === 'COUNT' || h === 'QTY' || h === 'QUANTITY' || h === 'ON HAND');
+      const SKU_ALIASES = ['EXTERNALID', 'EXTERNAL ID', 'SKU', 'ITEMCODE', 'ITEM CODE', 'STOCK CODE', 'PRODUCT CODE'];
+      const COUNT_ALIASES = ['PHYSICAL', 'COUNT', 'QTY', 'QUANTITY', 'AVAILABLE', 'ON HAND'];
+      const normalize = (h) => h.trim().toUpperCase().replace(/\s+/g, ' ');
+      const skuCol = headers.find(h => SKU_ALIASES.includes(normalize(h)));
+      const countCol = headers.find(h => COUNT_ALIASES.includes(normalize(h)));
 
       if (!skuCol || !countCol) {
-        throw new Error(`Could not find SKU and count columns. Found: ${headers.join(', ')}. Expected: ExternalId/SKU + Physical/Count/Qty`);
+        throw new Error(`Could not find SKU and count columns. Found: ${headers.join(', ')}. Expected: ExternalId/SKU/ItemCode + Physical/Count/Qty/Quantity`);
       }
 
       const adjustments = rows
