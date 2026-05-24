@@ -1,10 +1,9 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { useDemoMask } from '../contexts/DemoModeContext';
-import { BASE_URL, apiFetch, formatCurrency as _fmt } from '../utils';
+import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
 
 function getLocations(row) {
-  // Use locations from API if available, fallback to 'SCC'
   return (row.locations && row.locations.length > 0) ? row.locations : ['SCC'];
 }
 
@@ -86,21 +85,8 @@ function StockBar({ current, original }) {
   );
 }
 
-function SoldArrow({ value }) {
-  if (!value) return <span style={{ color: 'var(--text-dim)' }}>0</span>;
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-      <span style={{ fontSize: 13 }}>{value}</span>
-      <span style={{ color: value > 0 ? 'var(--green)' : 'var(--text-dim)', fontSize: 10 }}>
-        {value > 0 ? '▲' : '—'}
-      </span>
-    </span>
-  );
-}
-
 function extractFamily(productName) {
   if (!productName) return 'Other';
-  // e.g. "The Atlas - Black" → "Atlas", "Carina Gold" → "Carina"
   const cleaned = productName.replace(/^The\s+/i, '');
   const match = cleaned.match(/^([A-Za-z]+)/);
   return match ? match[1] : 'Other';
@@ -109,7 +95,6 @@ function extractFamily(productName) {
 function extractVariant(productName) {
   if (!productName) return '';
   const cleaned = productName.replace(/^The\s+/i, '');
-  // Remove the family name and any separator
   const family = cleaned.match(/^([A-Za-z]+)/)?.[1] || '';
   return cleaned.slice(family.length).replace(/^\s*[-–—]\s*/, '').trim() || cleaned;
 }
@@ -141,51 +126,64 @@ function parseCsvText(text) {
   return rows;
 }
 
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default function InventoryTab() {
-  const [data, setData] = useState(null);
+  const [snapshots, setSnapshots] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [data, setData] = useState(null); // { snapshot, lines, totals }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [expandedFamilies, setExpandedFamilies] = useState({});
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
+  const [snapshotDate, setSnapshotDate] = useState(todayIso());
   const fileRef = useRef();
   const { mc, mn } = useDemoMask();
 
-  const loadData = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch(`${BASE_URL}/api/inventory/valuation`)
-      .then(r => { if (!r.ok) throw new Error('Failed to load inventory'); return r.json(); })
-      .then(raw => {
-        // Transform valuation response to match expected shape
-        const skus = (raw.items || []).map(item => ({
-          sku: item.sku,
-          product_name: item.product_name,
-          quantity_remaining: item.units,
-          unit_cost: item.unit_cost,
-          inventory_value: item.total_value,
-          retail_value: item.retail_value || 0,
-          retail_price: item.retail_price || 0,
-          shipping_per_unit: item.shipping_per_unit || 0,
-          scc_stock: item.units,
-          gd_stock: 0,
-          locations: ['SCC'],
-          units_sold_this_month: 0,
-          po_numbers: [],
-          low_stock: item.units < 10,
-        }));
-        setData({ skus });
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+  const loadSnapshotList = useCallback(async () => {
+    const list = await apiFetch('/api/inventory/snapshots');
+    setSnapshots(list);
+    return list;
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  // Initial mount: load snapshot list, auto-select newest
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    loadSnapshotList()
+      .then(list => {
+        if (cancelled) return;
+        if (list.length > 0) setSelectedId(list[0].id);
+        else { setData(null); setLoading(false); }
+      })
+      .catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [loadSnapshotList]);
+
+  // When selection changes, fetch that snapshot's detail
+  useEffect(() => {
+    if (!selectedId) return;
+    let cancelled = false;
+    setLoading(true);
+    apiFetch(`/api/inventory/snapshots/${selectedId}`)
+      .then(d => { if (!cancelled) setData(d); })
+      .catch(e => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedId]);
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    if (!snapshotDate) {
+      setUploadResult({ type: 'error', text: 'Pick a snapshot date first.' });
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     setUploading(true); setUploadResult(null);
     try {
       let rows;
@@ -198,7 +196,6 @@ export default function InventoryTab() {
         const wb = XLSX.read(buf, { type: 'array' });
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-        // Normalize headers to uppercase trimmed
         rows = jsonRows.map(r => {
           const norm = {};
           for (const [k, v] of Object.entries(r)) {
@@ -212,40 +209,47 @@ export default function InventoryTab() {
       }
       if (rows.length === 0) throw new Error('No data rows found in file');
 
-      // Find SKU and count columns — case-insensitive with aliases
       const first = rows[0];
       const headers = Object.keys(first);
-      const SKU_ALIASES = ['EXTERNALID', 'EXTERNAL ID', 'SKU', 'ITEMCODE', 'ITEM CODE', 'STOCK CODE', 'PRODUCT CODE'];
+      const SKU_ALIASES   = ['EXTERNALID', 'EXTERNAL ID', 'SKU', 'ITEMCODE', 'ITEM CODE', 'STOCK CODE', 'PRODUCT CODE'];
       const COUNT_ALIASES = ['PHYSICAL', 'COUNT', 'QTY', 'QUANTITY', 'AVAILABLE', 'ON HAND'];
+      const NAME_ALIASES  = ['DESCRIPTION', 'PRODUCT NAME', 'PRODUCT', 'NAME', 'ITEM NAME', 'ITEM'];
       const normalize = (h) => h.trim().toUpperCase().replace(/\s+/g, ' ');
-      const skuCol = headers.find(h => SKU_ALIASES.includes(normalize(h)));
+      const skuCol   = headers.find(h => SKU_ALIASES.includes(normalize(h)));
       const countCol = headers.find(h => COUNT_ALIASES.includes(normalize(h)));
+      const nameCol  = headers.find(h => NAME_ALIASES.includes(normalize(h)));
 
       if (!skuCol || !countCol) {
         throw new Error(`Could not find SKU and count columns. Found: ${headers.join(', ')}. Expected: ExternalId/SKU/ItemCode + Physical/Count/Qty/Quantity`);
       }
 
-      const adjustments = rows
+      const lines = rows
         .filter(r => r[skuCol] && r[countCol] !== '')
-        .map(r => ({ sku: r[skuCol].trim(), physical_count: parseInt(r[countCol]) || 0 }))
-        .filter(a => a.sku);
+        .map(r => ({
+          sku: String(r[skuCol]).trim(),
+          product_name: nameCol ? String(r[nameCol] || '').trim() : '',
+          quantity: parseInt(r[countCol], 10) || 0,
+        }))
+        .filter(l => l.sku);
 
-      if (adjustments.length === 0) throw new Error('No valid SKU/count rows found');
+      if (lines.length === 0) throw new Error('No valid SKU/count rows found');
 
-      const result = await apiFetch('/api/inventory/adjustments/bulk', {
+      const created = await apiFetch('/api/inventory/snapshots', {
         method: 'POST',
         body: JSON.stringify({
-          adjustments,
-          notes: `Physical count upload — ${new Date().toISOString().slice(0, 10)}`,
-          location: 'SCC',
+          snapshot_date: snapshotDate,
+          label: `Physical count — ${snapshotDate}`,
+          lines,
         }),
       });
 
       setUploadResult({
         type: 'success',
-        text: `Updated ${result.count} SKUs (net delta: ${result.total_delta >= 0 ? '+' : ''}${result.total_delta} units).`,
+        text: `Snapshot saved for ${fmtDate(snapshotDate)}: ${lines.length} SKUs.`,
       });
-      loadData();
+
+      await loadSnapshotList();
+      setSelectedId(created.snapshot.id);
     } catch (err) {
       setUploadResult({ type: 'error', text: err.message });
     } finally {
@@ -254,15 +258,38 @@ export default function InventoryTab() {
     }
   };
 
+  // Map snapshot lines → the shape the existing family render expects
+  const skus = useMemo(() => {
+    if (!data?.lines) return [];
+    return data.lines.map(l => {
+      const isGd = (l.location || '').toLowerCase().includes('german') || (l.location || '').toLowerCase() === 'gd';
+      return {
+        sku: l.sku,
+        product_name: l.product_name || l.sku,
+        quantity_remaining: l.quantity,
+        unit_cost: l.unit_cost,
+        retail_price: l.retail_price,
+        inventory_value: l.inventory_value,
+        retail_value: l.retail_value,
+        scc_stock: isGd ? 0 : l.quantity,
+        gd_stock: isGd ? l.quantity : 0,
+        locations: [isGd ? 'GermanDrop' : 'SCC'],
+        units_sold_this_month: 0,
+        po_numbers: [],
+        low_stock: l.quantity < 10,
+      };
+    });
+  }, [data]);
+
   const filtered = useMemo(() => {
-    if (!data?.skus) return [];
-    if (!search.trim()) return data.skus;
+    if (!skus.length) return [];
+    if (!search.trim()) return skus;
     const q = search.toLowerCase();
-    return data.skus.filter(s =>
+    return skus.filter(s =>
       s.sku.toLowerCase().includes(q) ||
       (s.product_name || '').toLowerCase().includes(q)
     );
-  }, [data, search]);
+  }, [skus, search]);
 
   const families = useMemo(() => {
     const map = {};
@@ -282,28 +309,139 @@ export default function InventoryTab() {
     return Object.values(map).sort((a, b) => b.totalRetValue - a.totalRetValue);
   }, [filtered]);
 
-  const totalUnits = filtered.reduce((s, r) => s + r.quantity_remaining, 0);
-  const totalInvValue = filtered.reduce((s, r) => s + r.inventory_value, 0);
-  const totalRetValue = filtered.reduce((s, r) => s + r.retail_value, 0);
+  // Totals — prefer authoritative totals from the backend (cents-accurate) when
+  // the user isn't searching; recompute from filtered rows otherwise.
+  const totals = useMemo(() => {
+    if (!search.trim() && data?.totals) {
+      return {
+        units: data.totals.total_units,
+        skus: data.totals.total_skus,
+        inv: data.totals.total_inventory_value,
+        ret: data.totals.total_retail_value,
+      };
+    }
+    return {
+      units: filtered.reduce((s, r) => s + r.quantity_remaining, 0),
+      skus: filtered.length,
+      inv: filtered.reduce((s, r) => s + r.inventory_value, 0),
+      ret: filtered.reduce((s, r) => s + r.retail_value, 0),
+    };
+  }, [filtered, data, search]);
   const lowStockCount = filtered.filter(r => r.low_stock).length;
 
   const toggleFamily = (name) => {
     setExpandedFamilies(prev => ({ ...prev, [name]: !prev[name] }));
   };
 
-  if (loading) return <div className="loading">Loading inventory data...</div>;
+  // Header (date dropdown + upload) — shared by every render branch
+  const renderHeader = () => (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+      justifyContent: 'space-between', gap: 12, marginBottom: 12,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+          Snapshot:
+        </label>
+        <select
+          value={selectedId || ''}
+          onChange={e => setSelectedId(e.target.value)}
+          disabled={snapshots.length === 0}
+          style={{
+            padding: '6px 10px', borderRadius: 'var(--radius)',
+            border: '1px solid var(--border)', background: 'var(--bg-card)',
+            color: 'var(--text)', fontSize: 13, minWidth: 200,
+          }}
+        >
+          {snapshots.length === 0 && <option value="">No snapshots yet</option>}
+          {snapshots.map(s => (
+            <option key={s.id} value={s.id}>
+              {fmtDate(s.snapshot_date)}{s.label ? ` — ${s.label}` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+          Upload as of:
+        </label>
+        <input
+          type="date"
+          value={snapshotDate}
+          onChange={e => setSnapshotDate(e.target.value)}
+          disabled={uploading}
+          style={{
+            padding: '6px 10px', borderRadius: 'var(--radius)',
+            border: '1px solid var(--border)', background: 'var(--bg-card)',
+            color: 'var(--text)', fontSize: 13,
+          }}
+        />
+        <label className="btn btn-primary" style={{ cursor: uploading ? 'not-allowed' : 'pointer' }}>
+          {uploading ? 'Importing...' : '+ Upload Physical Count'}
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleUpload}
+            disabled={uploading}
+          />
+        </label>
+      </div>
+    </div>
+  );
+
   if (error) return <div className="error-msg">{error}</div>;
-  if (!data) return null;
+  if (loading && snapshots.length === 0) return <div className="loading">Loading inventory data...</div>;
+
+  // Empty state — no snapshots exist yet
+  if (snapshots.length === 0) {
+    return (
+      <div>
+        {renderHeader()}
+        {uploadResult && (
+          <div className={`sync-banner ${uploadResult.type}`} style={{ borderRadius: 'var(--radius)', marginBottom: 16 }}>
+            <span>{uploadResult.text}</span>
+            <button className="banner-close" onClick={() => setUploadResult(null)}>✕</button>
+          </div>
+        )}
+        <div className="card" style={{ padding: 40, textAlign: 'center' }}>
+          <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>
+            No inventory snapshots yet. Pick a date above and upload a physical count to get started.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
+      {renderHeader()}
+
+      {uploadResult && (
+        <div className={`sync-banner ${uploadResult.type}`} style={{ borderRadius: 'var(--radius)', marginBottom: 16 }}>
+          <span>{uploadResult.text}</span>
+          <button className="banner-close" onClick={() => setUploadResult(null)}>✕</button>
+        </div>
+      )}
+
+      {data?.snapshot && (
+        <div style={{
+          fontSize: 12, color: 'var(--text-muted)', marginBottom: 12,
+        }}>
+          Showing inventory as of <strong>{fmtDate(data.snapshot.snapshot_date)}</strong>
+          {data.snapshot.label ? ` — ${data.snapshot.label}` : ''}
+        </div>
+      )}
+
       {/* KPI Cards */}
       <div className="kpi-grid" style={{ marginBottom: 24 }}>
         {[
-          { label: 'Total SKUs', value: mn(filtered.length), cls: '' },
-          { label: 'Units in Stock', value: mn(totalUnits), cls: '' },
-          { label: 'Inventory Value', value: mc(_fmt(totalInvValue)), cls: '' },
-          { label: 'Retail Value', value: mc(_fmt(totalRetValue)), cls: 'green' },
+          { label: 'Total SKUs', value: mn(totals.skus), cls: '' },
+          { label: 'Units in Stock', value: mn(totals.units), cls: '' },
+          { label: 'Inventory Value', value: mc(_fmt(totals.inv)), cls: '' },
+          { label: 'Retail Value', value: mc(_fmt(totals.ret)), cls: 'green' },
         ].map(c => (
           <div key={c.label} className="kpi-card">
             <div className="kpi-label">{c.label}</div>
@@ -316,21 +454,6 @@ export default function InventoryTab() {
           </div>
         ))}
       </div>
-
-      {/* Upload Physical Count */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
-          {uploading ? 'Importing...' : '+ Upload Physical Count'}
-          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} disabled={uploading} />
-        </label>
-      </div>
-
-      {uploadResult && (
-        <div className={`sync-banner ${uploadResult.type}`} style={{ borderRadius: 'var(--radius)', marginBottom: 16 }}>
-          <span>{uploadResult.text}</span>
-          <button className="banner-close" onClick={() => setUploadResult(null)}>✕</button>
-        </div>
-      )}
 
       {/* Search / Filter Bar */}
       <div className="card" style={{ marginBottom: 20, padding: '14px 20px' }}>
@@ -364,7 +487,9 @@ export default function InventoryTab() {
           <div className="card-title" style={{ marginBottom: 14 }}>Stock Levels by Product Family</div>
         </div>
 
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div className="loading" style={{ padding: 24 }}>Loading snapshot...</div>
+        ) : filtered.length === 0 ? (
           <div className="empty">No inventory matches your search.</div>
         ) : (
           <div className="table-wrap">
@@ -375,11 +500,9 @@ export default function InventoryTab() {
                   <th>Product</th>
                   <th>Location</th>
                   <th className="text-right">In Stock</th>
-                  <th className="text-right">Sold This Month</th>
                   <th className="text-right">Unit Cost</th>
                   <th className="text-right">Inventory Value</th>
                   <th className="text-right">Retail Value</th>
-                  <th>PO #</th>
                 </tr>
               </thead>
               <tbody>
@@ -409,7 +532,6 @@ export default function InventoryTab() {
                           </span>
                         </td>
                         <td>
-                          {/* Show unique locations */}
                           <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                             {[...new Set(fam.skus.flatMap(s => getLocations(s)))].map(loc => (
                               <LocationBadge key={loc} location={loc} />
@@ -422,13 +544,9 @@ export default function InventoryTab() {
                             <StockBadges scc={fam.totalScc} gd={fam.totalGd} mn={mn} />
                           </span>
                         </td>
-                        <td className="text-right">
-                          <SoldArrow value={mn(fam.totalSold)} />
-                        </td>
                         <td className="text-right" style={{ color: 'var(--text-muted)' }}>—</td>
                         <td className="text-right" style={{ fontWeight: 600 }}>{mc(_fmt(fam.totalInvValue))}</td>
                         <td className="text-right" style={{ fontWeight: 600, color: 'var(--green)' }}>{mc(_fmt(fam.totalRetValue))}</td>
-                        <td></td>
                       </tr>
 
                       {/* Expanded SKU rows */}
@@ -464,18 +582,9 @@ export default function InventoryTab() {
                               <StockBadges scc={row.scc_stock} gd={row.gd_stock} mn={mn} />
                             </span>
                           </td>
-                          <td className="text-right">
-                            <SoldArrow value={mn(row.units_sold_this_month)} />
-                          </td>
                           <td className="text-right">{mc(_fmt(row.unit_cost))}</td>
                           <td className="text-right">{mc(_fmt(row.inventory_value))}</td>
                           <td className="text-right">{mc(_fmt(row.retail_value))}</td>
-                          <td style={{
-                            fontSize: 11, color: 'var(--text-muted)',
-                            maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                          }}>
-                            {row.po_numbers.join(', ')}
-                          </td>
                         </tr>
                       ))}
                     </React.Fragment>
@@ -489,12 +598,10 @@ export default function InventoryTab() {
                     TOTAL ({filtered.length} SKUs across {families.length} families)
                   </td>
                   <td></td>
-                  <td className="text-right" style={{ fontWeight: 700 }}>{mn(totalUnits)}</td>
-                  <td className="text-right" style={{ fontWeight: 700 }}>{mn(filtered.reduce((s, r) => s + r.units_sold_this_month, 0))}</td>
+                  <td className="text-right" style={{ fontWeight: 700 }}>{mn(totals.units)}</td>
                   <td></td>
-                  <td className="text-right" style={{ fontWeight: 700 }}>{mc(_fmt(totalInvValue))}</td>
-                  <td className="text-right" style={{ fontWeight: 700, color: 'var(--green)' }}>{mc(_fmt(totalRetValue))}</td>
-                  <td></td>
+                  <td className="text-right" style={{ fontWeight: 700 }}>{mc(_fmt(totals.inv))}</td>
+                  <td className="text-right" style={{ fontWeight: 700, color: 'var(--green)' }}>{mc(_fmt(totals.ret))}</td>
                 </tr>
               </tfoot>
             </table>

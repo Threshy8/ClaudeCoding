@@ -1265,6 +1265,158 @@ router.get('/inventory/valuation', async (req, res) => {
   }
 });
 
+// ── Inventory Snapshots ──────────────────────────────────────────────────────
+// Point-in-time physical inventory counts. unit_cost and retail_price are
+// frozen at upload time so historical value never drifts with later purchases.
+
+/**
+ * Build a { sku: unit_cost } map from the `purchases` table.
+ * Weighted average by quantity_remaining when stock remains; falls back to a
+ * simple average across purchase rows; 0 if the SKU isn't in purchases.
+ */
+async function getFrozenUnitCostMap(skus) {
+  if (!skus || skus.length === 0) return {};
+  const { data, error } = await supabase
+    .from('purchases')
+    .select('sku, unit_cost, quantity_remaining')
+    .in('sku', skus);
+  if (error) throw new Error(error.message);
+
+  const grp = {};
+  for (const p of (data || [])) {
+    if (!grp[p.sku]) grp[p.sku] = { rows: 0, weightedCents: 0, totalRem: 0, costSumCents: 0 };
+    const costCents = toCents(p.unit_cost);
+    const qr = p.quantity_remaining || 0;
+    grp[p.sku].rows += 1;
+    grp[p.sku].weightedCents += costCents * qr;
+    grp[p.sku].totalRem += qr;
+    grp[p.sku].costSumCents += costCents;
+  }
+
+  const map = {};
+  for (const sku of skus) {
+    const g = grp[sku];
+    if (!g) { map[sku] = 0; continue; }
+    if (g.totalRem > 0)      map[sku] = (g.weightedCents / g.totalRem) / 100;
+    else if (g.rows > 0)     map[sku] = (g.costSumCents / g.rows) / 100;
+    else                     map[sku] = 0;
+  }
+  return map;
+}
+
+// POST /api/inventory/snapshots
+// Body: { snapshot_date: 'YYYY-MM-DD', label?: string, lines: [{ sku, product_name, quantity }] }
+router.post('/inventory/snapshots', async (req, res) => {
+  const { snapshot_date, label, lines } = req.body || {};
+
+  if (!snapshot_date || !/^\d{4}-\d{2}-\d{2}$/.test(snapshot_date)) {
+    return res.status(400).json({ error: 'snapshot_date (YYYY-MM-DD) is required' });
+  }
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return res.status(400).json({ error: 'lines array is required' });
+  }
+
+  try {
+    // Idempotent per date — cascade deletes the old snapshot's lines.
+    await supabase.from('inventory_snapshots').delete().eq('snapshot_date', snapshot_date);
+
+    const skus = [...new Set(lines.map(l => l.sku).filter(Boolean))];
+    const unitCostMap = await getFrozenUnitCostMap(skus);
+
+    const { data: snap, error: snapErr } = await supabase
+      .from('inventory_snapshots')
+      .insert({ snapshot_date, label: label || null })
+      .select()
+      .single();
+    if (snapErr) return res.status(500).json({ error: snapErr.message });
+
+    const lineRows = lines
+      .filter(l => l.sku)
+      .map(l => ({
+        snapshot_id: snap.id,
+        sku: l.sku,
+        product_name: l.product_name || null,
+        quantity: parseInt(l.quantity, 10) || 0,
+        unit_cost: unitCostMap[l.sku] || 0,
+        retail_price: RETAIL_PRICE[l.sku] || 0,
+        location: l.location || 'SCC',
+      }));
+
+    const { data: insertedLines, error: linesErr } = await supabase
+      .from('inventory_snapshot_lines')
+      .insert(lineRows)
+      .select();
+    if (linesErr) return res.status(500).json({ error: linesErr.message });
+
+    res.json({ snapshot: snap, lines: insertedLines });
+  } catch (err) {
+    console.error('Create snapshot error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/inventory/snapshots — list (newest snapshot_date first)
+router.get('/inventory/snapshots', async (req, res) => {
+  const { data, error } = await supabase
+    .from('inventory_snapshots')
+    .select('id, snapshot_date, label, created_at')
+    .order('snapshot_date', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// GET /api/inventory/snapshots/:id — snapshot + lines + totals
+router.get('/inventory/snapshots/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: snap, error: snapErr } = await supabase
+      .from('inventory_snapshots')
+      .select('id, snapshot_date, label, created_at')
+      .eq('id', id)
+      .single();
+    if (snapErr) return res.status(404).json({ error: snapErr.message });
+
+    const { data: rawLines, error: linesErr } = await supabase
+      .from('inventory_snapshot_lines')
+      .select('id, sku, product_name, quantity, unit_cost, retail_price, location, created_at')
+      .eq('snapshot_id', id);
+    if (linesErr) return res.status(500).json({ error: linesErr.message });
+
+    let totalInvCents = 0;
+    let totalRetCents = 0;
+    let totalUnits = 0;
+    const lines = (rawLines || []).map(l => {
+      const qty = l.quantity || 0;
+      const invCents = toCents(l.unit_cost) * qty;
+      const retCents = toCents(l.retail_price) * qty;
+      totalInvCents += invCents;
+      totalRetCents += retCents;
+      totalUnits += qty;
+      return {
+        ...l,
+        unit_cost: parseFloat(l.unit_cost) || 0,
+        retail_price: parseFloat(l.retail_price) || 0,
+        inventory_value: invCents / 100,
+        retail_value: retCents / 100,
+      };
+    });
+
+    res.json({
+      snapshot: snap,
+      lines,
+      totals: {
+        total_skus: lines.length,
+        total_units: totalUnits,
+        total_inventory_value: totalInvCents / 100,
+        total_retail_value: totalRetCents / 100,
+      },
+    });
+  } catch (err) {
+    console.error('Get snapshot error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/cogs/recompute — full FIFO recompute from scratch
 const { recomputeAllCogs } = require('../utils/fifo');
 
