@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { useDemoMask } from '../contexts/DemoModeContext';
-import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
+import { apiFetch, formatCurrency as _fmt, fmtDate, parseSku } from '../utils';
 
 function getLocations(row) {
   return (row.locations && row.locations.length > 0) ? row.locations : ['SCC'];
@@ -211,11 +211,13 @@ export default function InventoryTab() {
 
       const first = rows[0];
       const headers = Object.keys(first);
-      const SKU_ALIASES   = ['EXTERNALID', 'EXTERNAL ID', 'SKU', 'ITEMCODE', 'ITEM CODE', 'STOCK CODE', 'PRODUCT CODE'];
+      // SKU column priority: ExternalId > SKU > ItemCode (search each group in order)
+      const SKU_PRIORITY  = [['EXTERNALID', 'EXTERNAL ID'], ['SKU'], ['ITEMCODE', 'ITEM CODE', 'STOCK CODE', 'PRODUCT CODE']];
       const COUNT_ALIASES = ['PHYSICAL', 'COUNT', 'QTY', 'QUANTITY', 'AVAILABLE', 'ON HAND'];
       const NAME_ALIASES  = ['DESCRIPTION', 'PRODUCT NAME', 'PRODUCT', 'NAME', 'ITEM NAME', 'ITEM'];
       const normalize = (h) => h.trim().toUpperCase().replace(/\s+/g, ' ');
-      const skuCol   = headers.find(h => SKU_ALIASES.includes(normalize(h)));
+      const skuCol = SKU_PRIORITY.reduce((found, aliases) =>
+        found || headers.find(h => aliases.includes(normalize(h))), null);
       const countCol = headers.find(h => COUNT_ALIASES.includes(normalize(h)));
       const nameCol  = headers.find(h => NAME_ALIASES.includes(normalize(h)));
 
@@ -557,9 +559,17 @@ export default function InventoryTab() {
                           <td style={{ paddingLeft: 24, width: 36 }}></td>
                           <td style={{ paddingLeft: 28 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span style={{ fontSize: 13, color: 'var(--text-body)' }}>
-                                {extractVariant(row.product_name)}
-                              </span>
+                              {(() => {
+                                const parsed = parseSku(row.sku);
+                                const label = parsed.colour
+                                  ? `${parsed.colour} · ${parsed.variantNum}-Watch`
+                                  : extractVariant(row.product_name);
+                                return (
+                                  <span style={{ fontSize: 13, color: 'var(--text-body)' }}>
+                                    {label}
+                                  </span>
+                                );
+                              })()}
                               <span className="mono" style={{ color: 'var(--text-dim)', fontSize: 11 }}>
                                 {row.sku}
                               </span>

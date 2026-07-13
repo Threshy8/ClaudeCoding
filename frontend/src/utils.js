@@ -30,3 +30,29 @@ export function fmtDate(d) {
   const [y, m, day] = d.split('-');
   return `${day}/${m}/${y}`;
 }
+
+const SKU_COLOURS = {
+  BLK: 'Black', BRN: 'Brown', GRN: 'Green', GRY: 'Grey',
+  WHT: 'White', TAN: 'Tan',   BLU: 'Blue',  RED: 'Red',
+};
+
+const SKU_MODELS = {
+  CAR: 'Carina', ORI: 'Orion',   VYG: 'Voyager', ATS: 'Atlas',
+  CYC: 'Cyclops', IMP: 'Imperium', TAU: 'Taurus',  LEO: 'Leone',
+};
+
+/**
+ * Parse a SKU in [COLOUR_PREFIX][DIGIT][MODEL_CODE] format, e.g. BLK1CAR.
+ * Returns { colour, variantNum, modelCode } with human-readable names,
+ * or nulls for any part that is unrecognised.
+ */
+export function parseSku(externalId) {
+  if (!externalId) return { colour: null, variantNum: null, modelCode: null };
+  const m = String(externalId).trim().toUpperCase().match(/^([A-Z]{3})(\d)([A-Z]{2,4})$/);
+  if (!m) return { colour: null, variantNum: null, modelCode: null };
+  return {
+    colour:    SKU_COLOURS[m[1]] || null,
+    variantNum: parseInt(m[2], 10),
+    modelCode: SKU_MODELS[m[3]] || null,
+  };
+}
