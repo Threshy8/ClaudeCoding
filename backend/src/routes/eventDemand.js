@@ -57,6 +57,36 @@ router.post('/demand-reports', async (req, res) => {
   }
 });
 
+// DELETE /api/events/demand-reports/:id — cascade deletes lines via FK
+router.delete('/demand-reports/:id', async (req, res) => {
+  const { error } = await supabase
+    .from('event_demand_reports')
+    .delete()
+    .eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ deleted: true });
+});
+
+// PATCH /api/events/demand-reports/:id — update label / dates
+router.patch('/demand-reports/:id', async (req, res) => {
+  const { label, event_start, event_end } = req.body || {};
+  const updates = {};
+  if (label       != null) updates.label       = String(label).trim();
+  if (event_start != null) updates.event_start = event_start;
+  if (event_end   != null) updates.event_end   = event_end;
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'Nothing to update' });
+  }
+  const { data, error } = await supabase
+    .from('event_demand_reports')
+    .update(updates)
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 // GET /api/events/demand-reports — list, ordered by event_end desc
 router.get('/demand-reports', async (req, res) => {
   const { data, error } = await supabase

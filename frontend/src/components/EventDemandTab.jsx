@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useDemoMask } from '../contexts/DemoModeContext';
 import { apiFetch, formatCurrency as _fmt, fmtDate } from '../utils';
+import DateRangePicker from './DateRangePicker';
 
 // ── CSV parser ─────────────────────────────────────────────────────────────────
 
@@ -150,8 +151,12 @@ export default function EventDemandTab() {
   const [uploading, setUploading]   = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
   const [label, setLabel]           = useState('');
-  const [eventStart, setEventStart] = useState('');
-  const [eventEnd, setEventEnd]     = useState('');
+  const [eventRange, setEventRange] = useState({ start: '', end: '', label: 'Custom' });
+  const [deletingId, setDeletingId] = useState(null);
+  const [editingReport, setEditingReport] = useState(null);
+  const [editLabel, setEditLabel]   = useState('');
+  const [editRange, setEditRange]   = useState({ start: '', end: '', label: 'Custom' });
+  const [saving, setSaving]         = useState(false);
   const fileRef = useRef();
   const { mc, mn } = useDemoMask();
 
@@ -160,6 +165,47 @@ export default function EventDemandTab() {
     setReports(list);
     return list;
   }, []);
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this report? This cannot be undone.')) return;
+    setDeletingId(id);
+    try {
+      await apiFetch(`/api/events/demand-reports/${id}`, { method: 'DELETE' });
+      const list = await loadReportList();
+      if (list.length > 0) setSelectedId(list[0].id);
+      else { setSelectedId(null); setData(null); }
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleEditStart = (r) => {
+    setEditingReport(r);
+    setEditLabel(r.label);
+    setEditRange({ start: r.event_start, end: r.event_end, label: 'Custom' });
+  };
+
+  const handleEditSave = async () => {
+    if (!editLabel.trim() || !editRange.start || !editRange.end) return;
+    setSaving(true);
+    try {
+      await apiFetch(`/api/events/demand-reports/${editingReport.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ label: editLabel.trim(), event_start: editRange.start, event_end: editRange.end }),
+      });
+      await loadReportList();
+      setEditingReport(null);
+      // Re-fetch detail so the subtitle and KPI header reflect updated label/dates
+      const d = await apiFetch(`/api/events/demand-reports/${editingReport.id}`);
+      setData(d);
+    } catch (err) {
+      alert('Save failed: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // Initial mount: load report list, auto-select newest
   useEffect(() => {
@@ -196,8 +242,8 @@ export default function EventDemandTab() {
       if (fileRef.current) fileRef.current.value = '';
       return;
     }
-    if (!eventStart || !eventEnd) {
-      setUploadResult({ type: 'error', text: 'Set both the From and To dates before uploading.' });
+    if (!eventRange.start || !eventRange.end) {
+      setUploadResult({ type: 'error', text: 'Set the event date range before uploading.' });
       if (fileRef.current) fileRef.current.value = '';
       return;
     }
@@ -213,8 +259,8 @@ export default function EventDemandTab() {
         method: 'POST',
         body: JSON.stringify({
           label:       label.trim(),
-          event_start: eventStart,
-          event_end:   eventEnd,
+          event_start: eventRange.start,
+          event_end:   eventRange.end,
           order_count: orderCount,
           lines,
         }),
@@ -256,9 +302,9 @@ export default function EventDemandTab() {
       display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end',
       justifyContent: 'space-between', gap: 12, marginBottom: 12,
     }}>
-      {/* Report selector */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Report:</label>
+      {/* Report selector + edit/delete */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, flexShrink: 0 }}>Report:</label>
         <select
           value={selectedId || ''}
           onChange={e => setSelectedId(e.target.value)}
@@ -276,6 +322,30 @@ export default function EventDemandTab() {
             </option>
           ))}
         </select>
+        {selectedId && (
+          <>
+            <button
+              onClick={() => { const r = reports.find(r => r.id === selectedId); if (r) handleEditStart(r); }}
+              title="Edit report"
+              style={{
+                background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+                color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13, padding: '5px 9px',
+                lineHeight: 1,
+              }}
+            >✎</button>
+            <button
+              onClick={() => handleDelete(selectedId)}
+              disabled={deletingId === selectedId}
+              title="Delete report"
+              style={{
+                background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+                color: deletingId === selectedId ? 'var(--text-dim)' : 'var(--red, #dc2626)',
+                cursor: deletingId === selectedId ? 'not-allowed' : 'pointer',
+                fontSize: 13, padding: '5px 9px', lineHeight: 1,
+              }}
+            >{deletingId === selectedId ? '…' : '🗑'}</button>
+          </>
+        )}
       </div>
 
       {/* Upload form */}
@@ -296,32 +366,8 @@ export default function EventDemandTab() {
           />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>From</label>
-          <input
-            type="date"
-            value={eventStart}
-            onChange={e => setEventStart(e.target.value)}
-            disabled={uploading}
-            style={{
-              padding: '6px 10px', borderRadius: 'var(--radius)',
-              border: '1px solid var(--border)', background: 'var(--bg-card)',
-              color: 'var(--text)', fontSize: 13,
-            }}
-          />
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>To</label>
-          <input
-            type="date"
-            value={eventEnd}
-            onChange={e => setEventEnd(e.target.value)}
-            disabled={uploading}
-            style={{
-              padding: '6px 10px', borderRadius: 'var(--radius)',
-              border: '1px solid var(--border)', background: 'var(--bg-card)',
-              color: 'var(--text)', fontSize: 13,
-            }}
-          />
+          <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>Event Date Range</label>
+          <DateRangePicker value={eventRange} onChange={setEventRange} />
         </div>
         <label
           className="btn btn-primary"
@@ -343,6 +389,46 @@ export default function EventDemandTab() {
 
   if (error) return <div className="error-msg">{error}</div>;
   if (loading && reports.length === 0) return <div className="loading">Loading demand reports…</div>;
+
+  const renderEditCard = () => editingReport && (
+    <div className="card" style={{ marginBottom: 12, padding: '14px 20px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>Label</label>
+          <input
+            type="text"
+            value={editLabel}
+            onChange={e => setEditLabel(e.target.value)}
+            style={{
+              padding: '6px 10px', borderRadius: 'var(--radius)',
+              border: '1px solid var(--border)', background: 'var(--bg-card)',
+              color: 'var(--text)', fontSize: 13, width: 210,
+            }}
+          />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>Date Range</label>
+          <DateRangePicker value={editRange} onChange={setEditRange} />
+        </div>
+        <button
+          className="btn btn-primary"
+          onClick={handleEditSave}
+          disabled={saving || !editLabel.trim() || !editRange.start || !editRange.end}
+          style={{ alignSelf: 'flex-end' }}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          className="btn"
+          onClick={() => setEditingReport(null)}
+          disabled={saving}
+          style={{ alignSelf: 'flex-end' }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 
   // Empty state
   if (reports.length === 0) {
@@ -371,6 +457,7 @@ export default function EventDemandTab() {
   return (
     <div>
       {renderHeader()}
+      {renderEditCard()}
 
       {uploadResult && (
         <div className={`sync-banner ${uploadResult.type}`} style={{ borderRadius: 'var(--radius)', marginBottom: 16 }}>
