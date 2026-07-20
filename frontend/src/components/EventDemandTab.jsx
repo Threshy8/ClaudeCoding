@@ -45,6 +45,7 @@ function parseShopifyOrdersCsv(text) {
   const colLineQty   = findCol('Lineitem quantity');
   const colLinePrice = findCol('Lineitem price');
   const colShipping  = findCol('Shipping Method', 'Shipping method');
+  const colVendor    = findCol('Vendor');
 
   if (!colLineName || !colLineQty) {
     throw new Error(
@@ -68,6 +69,25 @@ function parseShopifyOrdersCsv(text) {
     }
   }
 
+  // Add-on/non-product line items to exclude from the product table.
+  // Orders containing these still count toward order_count.
+  const isAddOn = (name, sku, vendor) => {
+    const v = (vendor || '').toLowerCase();
+    const s = (sku    || '').toLowerCase();
+    return (
+      v === 're:do'                                     ||
+      s === 'x-redo'                                    ||
+      name.startsWith('FREE GIFT |')                    ||
+      name === 'Item Personalization'                   ||
+      name.includes('Extended Warranty')                ||
+      name.includes('AusPost Shipping')                 ||
+      name.includes('Additional charges for expedited') ||
+      name.includes('Complimentary Gift')               ||
+      name.includes('Free Unlimited Return')            ||
+      name === 'Free Voyager Travel Case'
+    );
+  };
+
   // Pass 2: aggregate line items by (product_name, sku).
   const aggMap = new Map();
   const orderSet = new Set();
@@ -83,7 +103,11 @@ function parseShopifyOrdersCsv(text) {
     const productName = row[colLineName]?.trim();
     if (!productName) continue;
 
-    const sku      = row[colLineSku]?.trim() || '';
+    const sku    = row[colLineSku]?.trim() || '';
+    const vendor = colVendor ? row[colVendor]?.trim() || '' : '';
+    if (isAddOn(productName, sku, vendor)) continue;
+
+
     const qty      = parseInt(row[colLineQty], 10) || 0;
     const price    = parseFloat(row[colLinePrice]) || 0;
     const shipping = curOrder ? (orderShippingMap[curOrder] || '') : '';
