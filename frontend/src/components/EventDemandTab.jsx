@@ -220,6 +220,13 @@ export default function EventDemandTab() {
     );
   }, [data, search]);
 
+  const filteredTotals = useMemo(() => ({
+    total_units:    filtered.reduce((s, l) => s + (l.total_qty    || 0), 0),
+    total_standard: filtered.reduce((s, l) => s + (l.standard_qty || 0), 0),
+    total_express:  filtered.reduce((s, l) => s + (l.express_qty  || 0), 0),
+    total_revenue:  filtered.reduce((s, l) => s + parseFloat(l.total_revenue || 0), 0),
+  }), [filtered]);
+
   const renderHeader = () => (
     <div style={{
       display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end',
@@ -334,14 +341,6 @@ export default function EventDemandTab() {
   }
 
   const { report, totals } = data || {};
-
-  // Filtered totals (recompute from visible rows when searching)
-  const filteredTotals = useMemo(() => ({
-    total_units:    filtered.reduce((s, l) => s + (l.total_qty    || 0), 0),
-    total_standard: filtered.reduce((s, l) => s + (l.standard_qty || 0), 0),
-    total_express:  filtered.reduce((s, l) => s + (l.express_qty  || 0), 0),
-    total_revenue:  filtered.reduce((s, l) => s + parseFloat(l.total_revenue || 0), 0),
-  }), [filtered]);
 
   const displayTotals = search.trim() ? filteredTotals : (totals || filteredTotals);
 
