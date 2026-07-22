@@ -28,11 +28,10 @@ router.get('/export', async (req, res) => {
       ? `${year + 1}-01-01`
       : `${year}-${String(month + 1).padStart(2, '0')}-01`;
     const cogsData = await buildCogsData(periodStart, periodEnd, period);
-    const { sku_breakdown, total_cogs, period: p } = cogsData;
+    const { sku_breakdown, total_cogs } = cogsData;
 
-    const [year, month] = p.split('-');
-    const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
-    const journalDate = `${lastDay}/${month}/${year}`; // Xero DD/MM/YYYY
+    const lastDay = new Date(year, month, 0).getDate();
+    const journalDate = `${lastDay}/${String(month).padStart(2, '0')}/${year}`; // Xero DD/MM/YYYY
 
     const narration = `COGS Recognition - ${period}`;
 
