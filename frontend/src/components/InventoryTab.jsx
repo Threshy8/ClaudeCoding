@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { useDemoMask } from '../contexts/DemoModeContext';
-import { apiFetch, formatCurrency as _fmt, fmtDate, parseSku } from '../utils';
+import { apiFetch, formatCurrency as _fmt, fmtDate, parseSku, BASE_URL } from '../utils';
 
 function getLocations(row) {
   return (row.locations && row.locations.length > 0) ? row.locations : ['SCC'];
@@ -335,6 +335,25 @@ export default function InventoryTab() {
     setExpandedFamilies(prev => ({ ...prev, [name]: !prev[name] }));
   };
 
+  const handleExportCsv = async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/api/inventory/snapshots/${selectedId}/export`);
+      if (!res.ok) throw new Error('Export failed');
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `inventory-valuation-${data?.snapshot?.snapshot_date || 'export'}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Export failed: ' + err.message);
+    }
+  };
+
   // Header (date dropdown + upload) — shared by every render branch
   const renderHeader = () => (
     <div style={{
@@ -362,6 +381,16 @@ export default function InventoryTab() {
             </option>
           ))}
         </select>
+        {selectedId && data && (
+          <button
+            className="btn"
+            onClick={handleExportCsv}
+            title="Download inventory valuation as CSV"
+            style={{ fontSize: 12 }}
+          >
+            ↓ Export CSV
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

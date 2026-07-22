@@ -35,12 +35,6 @@ export const deletePurchase = (id) => request(`/api/purchases/${id}`, { method: 
 // Products
 export const getProducts = () => request('/api/products');
 
-// COGS — accepts a dateRange { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' }
-export const getCogsSummary = ({ start, end }) => {
-  const params = new URLSearchParams({ start_date: start, end_date: end });
-  return request(`/api/cogs/summary?${params}`);
-};
-
 // Shopify sync
 export const syncShopify = (store = 'au') =>
   request('/api/sync/shopify', { method: 'POST', body: JSON.stringify({ store }) });
@@ -48,10 +42,6 @@ export const syncShopify = (store = 'au') =>
 // Redo returns sync
 export const syncRedo = (store = 'au') =>
   request('/api/sync/redo', { method: 'POST', body: JSON.stringify({ store }) });
-
-// Journal export — returns CSV text
-export const exportJournal = (period) =>
-  request(`/api/journal/export?period=${period}&format=csv`);
 
 // Capital Expenses
 export const getCapitalExpenses = (startDate, endDate) => {

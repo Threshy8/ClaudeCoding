@@ -1365,6 +1365,46 @@ router.get('/inventory/snapshots', async (req, res) => {
   res.json(data || []);
 });
 
+// GET /api/inventory/snapshots/:id/export — CSV inventory valuation download
+router.get('/inventory/snapshots/:id/export', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: snap, error: snapErr } = await supabase
+      .from('inventory_snapshots')
+      .select('id, snapshot_date, label')
+      .eq('id', id)
+      .single();
+    if (snapErr) return res.status(404).json({ error: snapErr.message });
+
+    const { data: lines, error: linesErr } = await supabase
+      .from('inventory_snapshot_lines')
+      .select('sku, product_name, quantity, unit_cost')
+      .eq('snapshot_id', id)
+      .order('product_name', { ascending: true });
+    if (linesErr) return res.status(500).json({ error: linesErr.message });
+
+    const rows = [['SKU', 'Product Name', 'Qty on Hand', 'Unit Cost', 'Total Value']];
+    for (const l of lines || []) {
+      const qty = l.quantity || 0;
+      const cost = parseFloat(l.unit_cost) || 0;
+      const total = Math.round(qty * cost * 100) / 100;
+      rows.push([l.sku, l.product_name || '', qty, cost.toFixed(2), total.toFixed(2)]);
+    }
+
+    const csv = rows
+      .map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const filename = `inventory-valuation-${snap.snapshot_date}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('Inventory export error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/inventory/snapshots/:id — snapshot + lines + totals
 router.get('/inventory/snapshots/:id', async (req, res) => {
   const { id } = req.params;

@@ -14,7 +14,6 @@ const purchasesRouter = require('./routes/purchases');
 const productsRouter = require('./routes/products');
 const syncRouter = require('./routes/sync');
 const cogsRouter = require('./routes/cogs');
-const journalRouter = require('./routes/journal');
 const fulfillmentRouter = require('./routes/fulfillment');
 const auspostRouter = require('./routes/auspost');
 const redoRouter = require('./routes/redo');
@@ -36,7 +35,6 @@ app.use('/api/products', productsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/cogs', cogsRouter);
 app.use('/api', cogsRouter); // also mounts /api/inventory/summary from cogsRouter
-app.use('/api/journal', journalRouter);
 app.use('/api/fulfillment', fulfillmentRouter);
 app.use('/api/3pl/auspost', auspostRouter);
 app.use('/api/sync/redo', redoRouter);
