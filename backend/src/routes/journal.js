@@ -22,7 +22,12 @@ router.get('/export', async (req, res) => {
   }
 
   try {
-    const cogsData = await buildCogsData(period);
+    const [year, month] = period.split('-').map(Number);
+    const periodStart = `${year}-${String(month).padStart(2, '0')}-01`;
+    const periodEnd   = month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+    const cogsData = await buildCogsData(periodStart, periodEnd, period);
     const { sku_breakdown, total_cogs, period: p } = cogsData;
 
     const [year, month] = p.split('-');
